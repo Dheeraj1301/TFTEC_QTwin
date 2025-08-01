@@ -22,4 +22,20 @@ class QuantumLayer(Module):
         self.q_layer = qml.qnn.TorchLayer(quantum_circuit, weight_shapes)
 
     def forward(self, x):
-        return self.q_layer(x)
+        """Evaluate the underlying quantum circuit for a batch of inputs.
+
+        Pennylane's :class:`~pennylane.qnn.TorchLayer` does not
+        automatically broadcast over the batch dimension in some
+        environments. This wrapper manually iterates over the batch
+        dimension so that ``x`` can be of shape ``(batch, n_qubits)``.
+        """
+
+        # Ensure batched tensor
+        if x.ndim == 1:
+            x = x.unsqueeze(0)
+
+        outputs = []
+        for sample in x:
+            outputs.append(self.q_layer(sample))
+
+        return torch.stack(outputs, dim=0)
