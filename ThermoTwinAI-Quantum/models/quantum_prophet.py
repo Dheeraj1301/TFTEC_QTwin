@@ -39,52 +39,43 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
         ) -> None:
             super().__init__()
 
-            # Project the input sequence to four features using a 1×1 convolution
-            self.input_proj = nn.Conv1d(num_features, n_qubits, kernel_size=1)
+            # 1D convolution followed by ReLU prior to the quantum circuit
+            self.pre_q = nn.Sequential(
+                nn.Conv1d(num_features, n_qubits, kernel_size=3, padding=1),
+                nn.ReLU(),
+            )
 
             # Normalise to stabilise variance before entering the quantum circuit
             self.norm = nn.LayerNorm(4)
 
-            # Residual linear path to model direct classical trends and
-            # mitigate sign inversion observed in predictions
-            self.residual_head = nn.Linear(n_qubits, 1)
+            # Quantum layer configured with depth=1
+            self.q_layer = QuantumLayer(n_layers=1)
 
-            # Quantum layer with fixed shallow depth (exactly two layers) to
-            # maintain stability.  ``AngleEmbedding`` is implicitly implemented
-            # via rotations inside :class:`QuantumLayer`.  ``q_depth`` remains in
-            # the signature for backward compatibility but is not used.
-            self.q_layer = QuantumLayer(n_layers=2)
-
-            # Post-quantum head: Linear(4→32) → BatchNorm1d → GELU → Dropout → Linear(32→1)
-            # ``hidden_dim`` is kept in the signature for compatibility but the
-            # architecture is fixed to 32 units as per the research setup.
+            # Post-quantum head: Linear(4→32) → BatchNorm1d → ReLU → Dropout(0.2) → Linear(32→1)
+            # ``dropout`` argument retained for backward compatibility but fixed
+            # to 0.2 as per the updated design.
             self.classical_head = nn.Sequential(
                 nn.Linear(n_qubits, 32),
                 nn.BatchNorm1d(32),
-                nn.GELU(),
-                nn.Dropout(dropout),
+                nn.ReLU(),
+                nn.Dropout(0.2),
                 nn.Linear(32, 1),
             )
 
-            # Bound the final prediction to [0, 1] (the range of the normalised
-            # target) which also helps to avoid inverted trends.
-            self.output_activation = nn.Sigmoid()
+            # Previous residual and sigmoid heads removed to reduce bias toward
+            # inverted trends; output is linear for downstream processing.
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Input comes as (batch, seq, features); rearrange for Conv1d
             x = x.permute(0, 2, 1)
-            x = self.input_proj(x)  # (batch, n_qubits, seq)
+            x = self.pre_q(x)  # conv + ReLU -> (batch, n_qubits, seq)
 
-            # Use the most recent time step rather than averaging the entire
-            # window.  Averaging tended to blur the downward CoP trend and could
-            # result in predictions with inverted slope.
+            # Use only the last timestep then normalise before quantum layer
             x = x[:, :, -1]
-            x = self.norm(x)  # normalise features prior to quantum layer
-
-            trend = self.residual_head(x)  # learn linear trend directly
+            x = self.norm(x)
             x = self.q_layer(x)
-            out = self.classical_head(x) + trend  # combine quantum and classical paths
-            return self.output_activation(out)
+            out = self.classical_head(x)
+            return out
 
 
 def train_quantum_prophet(
@@ -128,7 +119,16 @@ def train_quantum_prophet(
         optimizer.step()
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 
+    # Evaluate correlation and error on training data for diagnostics
     model.eval()
     with torch.no_grad():
+        train_preds = model(X_train).cpu()
         preds = model(X_test).cpu().numpy().flatten()
+
+    corr = float(torch.corrcoef(
+        torch.stack((train_preds.squeeze(), y_train.squeeze()))
+    )[0, 1])
+    mse = nn.functional.mse_loss(train_preds, y_train).item()
+    print(f"[QProphet] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
+
     return preds
