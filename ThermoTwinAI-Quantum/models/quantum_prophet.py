@@ -1,53 +1,114 @@
-import torch
-import torch.nn as nn
-import pennylane as qml
-import numpy as np
+"""Quantum-augmented NeuralProphet-style model.
 
-class QuantumLayer(nn.Module):
-    def __init__(self, n_qubits=4, depth=2):
-        super().__init__()
-        dev = qml.device("default.qubit", wires=n_qubits)
+This module originally relied on heavy third-party libraries such as
+``torch`` and ``pennylane``.  Importing the file without those dependencies
+installed would raise an ``ImportError`` before the training helper function
+could be accessed, which in turn triggered the
+``ImportError: cannot import name 'train_quantum_prophet'`` message observed
+by users.  To make the failure mode clearer we attempt the imports lazily and
+provide a stub implementation when the dependencies are missing.
+"""
 
-        @qml.qnode(dev, interface="torch")
-        def circuit(inputs, weights):
-            qml.templates.AngleEmbedding(inputs, wires=range(n_qubits))
-            qml.templates.StronglyEntanglingLayers(weights, wires=range(n_qubits))
-            return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
+from typing import Any
 
-        weight_shapes = {"weights": (depth, n_qubits, 3)}
-        self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
+try:  # pragma: no cover - executed only when deps are available
+    import torch
+    import torch.nn as nn
 
-    def forward(self, x):
-        return self.qlayer(x)
+    from utils.quantum_layers import QuantumLayer, n_qubits
+except Exception as exc:  # pragma: no cover - used for graceful degradation
+    torch = None
+    nn = None
+    QuantumLayer = None  # type: ignore
+    n_qubits = 0  # type: ignore
+    _IMPORT_ERROR = exc
+else:  # pragma: no cover - executed only when deps are available
+    _IMPORT_ERROR = None
 
-class QProphetModel(nn.Module):
-    def __init__(self, input_channels=5, sequence_length=30):
-        super().__init__()
-        self.cnn = nn.Sequential(
-            nn.Conv1d(input_channels, 8, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(4)  # Output: (batch, 8, 4)
-        )
 
-        self.linear_in = nn.Linear(8 * 4, 4)  # Reduce to 4 for 4-qubit input
-        self.norm = nn.LayerNorm(4)
+if torch is not None:  # pragma: no cover - executed only when deps are available
+    class QProphetModel(nn.Module):
+        """Linear projection into a quantum layer with a small classical head."""
 
-        self.q_layer = QuantumLayer(n_qubits=4, depth=2)
+        def __init__(
+            self,
+            num_features: int,
+            hidden_dim: int = 32,
+            q_depth: int = 2,
+            dropout: float = 0.2,
+        ) -> None:
+            super().__init__()
 
-        self.head = nn.Sequential(
-            nn.Linear(4, 32),
-            nn.BatchNorm1d(32),
-            nn.GELU(),
-            nn.Dropout(0.2),
-            nn.Linear(32, 1)
-        )
+            # Project the input sequence to four features using a 1×1 convolution
+            self.input_proj = nn.Conv1d(num_features, n_qubits, kernel_size=1)
 
-    def forward(self, x):
-        # x shape: (batch, seq_len, features)
-        x = x.permute(0, 2, 1)  # to (batch, features, seq_len)
-        x = self.cnn(x)  # (batch, 8, 4)
-        x = x.view(x.size(0), -1)  # (batch, 32)
-        x = self.linear_in(x)     # (batch, 4)
-        x = self.norm(x)
-        x = self.q_layer(x)       # (batch, 4)
-        return self.head(x)       # (batch, 1)
+            # Normalise to stabilise variance before entering the quantum circuit
+            self.norm = nn.LayerNorm(4)
+
+            # Shallow quantum circuit with limited depth to avoid overfitting
+            self.q_layer = QuantumLayer(n_layers=min(q_depth, 3))
+
+            # Classical head: Linear -> BatchNorm1d -> ReLU -> Dropout -> Linear
+            self.classical_head = nn.Sequential(
+                nn.Linear(n_qubits, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1),
+            )
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            # Input comes as (batch, seq, features); rearrange for Conv1d
+            x = x.permute(0, 2, 1)
+            x = self.input_proj(x)  # (batch, n_qubits, seq)
+            x = x.mean(dim=-1)  # aggregate over time -> (batch, n_qubits)
+            x = self.norm(x)
+            x = self.q_layer(x)
+            return self.classical_head(x)
+
+
+def train_quantum_prophet(
+    X_train: Any,
+    y_train: Any,
+    X_test: Any,
+    epochs: int = 50,
+    lr: float = 0.005,
+    hidden_dim: int = 32,
+    q_depth: int = 2,
+):
+    """Train ``QProphetModel`` and return predictions for ``X_test``.
+
+    If the optional dependencies (``torch`` and ``pennylane``) are not
+    installed the function will raise a clear and immediate ``ImportError``
+    explaining which package is missing.
+    """
+
+    if torch is None or QuantumLayer is None:
+        raise ImportError(
+            "train_quantum_prophet requires `torch` and `pennylane` to be installed"
+        ) from _IMPORT_ERROR
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    num_features = X_train.shape[2]
+    model = QProphetModel(num_features, hidden_dim=hidden_dim, q_depth=q_depth).to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
+    y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
+    X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
+
+    for epoch in range(epochs):
+        model.train()
+        optimizer.zero_grad()
+        output = model(X_train)
+        loss = criterion(output, y_train)
+        loss.backward()
+        optimizer.step()
+        print(f"[QProphet] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
+
+    model.eval()
+    with torch.no_grad():
+        preds = model(X_test).cpu().numpy().flatten()
+    return preds
