@@ -8,10 +8,31 @@ circuit depth is constrained to a single layer to maintain simulation
 stability.
 """
 
+import math
 import torch
 import torch.nn as nn
 
 from utils.quantum_layers import QuantumLayer
+
+
+class PositionalEncoding(nn.Module):
+    """Sinusoidal positional encoding added to the input sequence."""
+
+    def __init__(self, d_model: int, max_len: int = 5000) -> None:
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2, dtype=torch.float)
+            * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        seq_len = x.size(1)
+        return x + self.pe[:seq_len]
 
 
 class QLSTMModel(nn.Module):
@@ -21,6 +42,9 @@ class QLSTMModel(nn.Module):
         self, input_size: int, hidden_size: int = 16, q_depth: int = 1
     ) -> None:
         super().__init__()
+
+        # Positional encoding to provide explicit time information
+        self.pos_encoder = PositionalEncoding(input_size)
 
         # FINAL_FIX: optional temporal conv to capture short-range dependencies
         self.temporal_conv = nn.Conv1d(
@@ -35,8 +59,12 @@ class QLSTMModel(nn.Module):
             bidirectional=True,
         )
 
-        # Soft attention over LSTM outputs to preserve temporal signals
+        # Projection for residual connection from input to LSTM output
+        self.input_proj = nn.Linear(input_size, hidden_size * 2)
+
+        # Gated attention over LSTM outputs to preserve temporal signals
         self.attention = nn.Linear(hidden_size * 2, 1)
+        self.attn_gate = nn.Linear(hidden_size * 2, 1)
 
         # Normalize features passed to the quantum layer
         self.norm = nn.LayerNorm(4)
@@ -51,16 +79,23 @@ class QLSTMModel(nn.Module):
         self.fc = nn.Linear(4, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # FINAL_FIX: temporal convolution over features
+        # Add positional information and temporal convolution over features
+        x = self.pos_encoder(x)
         x = x.transpose(1, 2)
         x = torch.relu(self.temporal_conv(x))
         x = x.transpose(1, 2)
 
+        # Residual connection: project input to match LSTM output dimensions
+        residual = self.input_proj(x)
+
         # ``lstm_out`` has shape (batch, seq, hidden*2)
         lstm_out, _ = self.lstm(x)
+        lstm_out = lstm_out + residual
 
-        # Compute soft attention weights across the sequence dimension
-        attn_scores = self.attention(lstm_out)  # (batch, seq, 1)
+        # Compute gated attention weights across the sequence dimension
+        attn_scores = self.attention(lstm_out)
+        gate = torch.sigmoid(self.attn_gate(lstm_out))
+        attn_scores = attn_scores * gate
         attn_weights = torch.softmax(attn_scores, dim=1)
         context = torch.sum(attn_weights * lstm_out, dim=1)
 
