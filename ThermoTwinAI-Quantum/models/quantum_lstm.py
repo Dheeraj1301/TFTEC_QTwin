@@ -16,8 +16,23 @@ from utils.quantum_layers import QuantumLayer, n_qubits
 class QLSTMModel(nn.Module):
     """Unidirectional LSTM followed by a shallow quantum readout."""
 
-    def __init__(self, input_size: int, hidden_size: int = 16, q_depth: int = 2) -> None:
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int = 16,
+        q_depth: int = 2,
+        use_conv: bool = True,
+    ) -> None:
         super().__init__()
+
+        # Optional 1D convolution to smooth short-term fluctuations.  The
+        # convolution operates on the feature/channel dimension and preserves
+        # dimensionality so downstream interfaces remain unchanged.
+        self.conv = (
+            nn.Conv1d(input_size, input_size, kernel_size=3, padding=1)
+            if use_conv
+            else None
+        )
 
         # Single-directional LSTM; final timestep is used as classical features
         self.lstm = nn.LSTM(
@@ -27,27 +42,39 @@ class QLSTMModel(nn.Module):
             bidirectional=False,
         )
 
-        # LayerNorm stabilizes features before entering the quantum layer
+        # LayerNorm stabilises feature scale before entering the quantum layer
         self.norm = nn.LayerNorm(n_qubits)
 
-        # Shallow quantum circuit with fixed entanglement depth of two
-        self.q_layer = QuantumLayer(n_layers=q_depth)
+        # Keep the quantum circuit extremely shallow (1–2 layers) for stability
+        self.q_layer = QuantumLayer(n_layers=max(1, min(q_depth, 2)))
 
-        # Lightweight classical head: Linear -> ReLU -> Linear
-        self.fc1 = nn.Linear(n_qubits, 32)
-        self.fc2 = nn.Linear(32, 1)
+        # Post-quantum head: Linear(4→16) → GELU → Linear(16→1)
+        self.fc1 = nn.Linear(n_qubits, 16)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(16, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Optional local smoothing via Conv1d
+        if self.conv is not None:
+            # Conv1d expects (batch, channels, seq_len)
+            x = x.transpose(1, 2)
+            x = self.conv(x)
+            x = x.transpose(1, 2)
+
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)
-        final = lstm_out[:, -1, :]  # output of the final timestep
 
-        # Normalize and pass only first ``n_qubits`` features to the quantum layer
-        q_input = self.norm(final[:, :n_qubits])
+        # Residual fusion of final timestep with mean-pooled context
+        final = lstm_out[:, -1, :]
+        mean = lstm_out.mean(dim=1)
+        fused = final + mean
+
+        # Normalise and feed the first ``n_qubits`` features to the quantum layer
+        q_input = self.norm(fused[:, :n_qubits])
         q_out = self.q_layer(q_input)
 
-        # Lightweight output head to avoid overfitting
-        out = torch.relu(self.fc1(q_out))
+        # Post-quantum MLP head
+        out = self.act(self.fc1(q_out))
         return self.fc2(out)
 
 
