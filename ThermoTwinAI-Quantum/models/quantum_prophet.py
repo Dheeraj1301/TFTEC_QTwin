@@ -45,16 +45,20 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Normalise to stabilise variance before entering the quantum circuit
             self.norm = nn.LayerNorm(4)
 
-            # Shallow quantum circuit with limited depth to avoid overfitting
-            self.q_layer = QuantumLayer(n_layers=min(q_depth, 3))
+            # Quantum layer with fixed shallow depth (2) to maintain stability.
+            # ``AngleEmbedding`` is implicitly implemented via rotations in the
+            # underlying ``QuantumLayer``.
+            self.q_layer = QuantumLayer(n_layers=max(1, min(q_depth, 2)))
 
-            # Classical head: Linear -> BatchNorm1d -> ReLU -> Dropout -> Linear
+            # Post-quantum head: Linear(4→32) → BatchNorm1d → GELU → Dropout → Linear(32→1)
+            # ``hidden_dim`` is kept in the signature for compatibility but the
+            # architecture is fixed to 32 units as per the research setup.
             self.classical_head = nn.Sequential(
-                nn.Linear(n_qubits, hidden_dim),
-                nn.BatchNorm1d(hidden_dim),
-                nn.ReLU(),
+                nn.Linear(n_qubits, 32),
+                nn.BatchNorm1d(32),
+                nn.GELU(),
                 nn.Dropout(dropout),
-                nn.Linear(hidden_dim, 1),
+                nn.Linear(32, 1),
             )
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -62,7 +66,7 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             x = x.permute(0, 2, 1)
             x = self.input_proj(x)  # (batch, n_qubits, seq)
             x = x.mean(dim=-1)  # aggregate over time -> (batch, n_qubits)
-            x = self.norm(x)
+            x = self.norm(x)  # ensure stable scale for quantum input
             x = self.q_layer(x)
             return self.classical_head(x)
 
