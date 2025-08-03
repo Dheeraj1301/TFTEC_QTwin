@@ -2,29 +2,52 @@
 import torch
 import torch.nn as nn
 from utils.quantum_layers import QuantumLayer
-import numpy as np
+
 
 class QProphetModel(nn.Module):
-    def __init__(self):
+    """Feed-forward network augmented with a quantum feature map."""
+
+    def __init__(self, input_size: int, hidden_dim: int = 16, q_layers: int = 8):
         super().__init__()
-        self.q_layer = QuantumLayer()
-        self.fc1 = nn.Linear(4, 8)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(8, 1)
 
-    def forward(self, x):
-        q_out = self.q_layer(x[:, :4])
-        x = self.relu(self.fc1(q_out))
-        return self.fc2(x)
+        # Reduce the potentially large multivariate window into four features
+        self.feature_proj = nn.Linear(input_size, 4)
+        self.q_layer = QuantumLayer(n_layers=q_layers)
 
-def train_quantum_prophet(X_train, y_train, X_test, epochs=50, lr=0.005):
+        # Classical post-processing of quantum outputs
+        self.net = nn.Sequential(
+            nn.Linear(4, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.feature_proj(x)
+        q_out = self.q_layer(x)
+        return self.net(q_out)
+
+
+def train_quantum_prophet(
+    X_train,
+    y_train,
+    X_test,
+    epochs: int = 50,
+    lr: float = 0.005,
+    hidden_dim: int = 16,
+    q_layers: int = 8,
+):
+    """Train the ``QProphetModel`` and return predictions for ``X_test``."""
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = QProphetModel().to(device)
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
+    # Flatten windowed data to a single feature vector per sample
     X_train = X_train.reshape(X_train.shape[0], -1)
     X_test = X_test.reshape(X_test.shape[0], -1)
+    input_size = X_train.shape[1]
+
+    model = QProphetModel(input_size, hidden_dim=hidden_dim, q_layers=q_layers).to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
@@ -37,7 +60,7 @@ def train_quantum_prophet(X_train, y_train, X_test, epochs=50, lr=0.005):
         loss = criterion(output, y_train)
         loss.backward()
         optimizer.step()
-        print(f"[QProphet] Epoch {epoch+1}/{epochs} - Loss: {loss.item():.6f}")
+        print(f"[QProphet] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 
     model.eval()
     with torch.no_grad():
