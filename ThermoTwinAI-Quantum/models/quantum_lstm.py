@@ -20,13 +20,14 @@ class QLSTMModel(nn.Module):
 
 def train_quantum_lstm(X_train, y_train, X_test, epochs=50, lr=0.005):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = QLSTMModel(1).to(device)
+    num_features = X_train.shape[2]
+    model = QLSTMModel(num_features).to(device)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    X_train = torch.tensor(X_train[:, :, None], dtype=torch.float32).to(device)
+    X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
-    X_test = torch.tensor(X_test[:, :, None], dtype=torch.float32).to(device)
+    X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
 
     for epoch in range(epochs):
         model.train()
