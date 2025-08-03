@@ -22,6 +22,11 @@ class QLSTMModel(nn.Module):
     ) -> None:
         super().__init__()
 
+        # FINAL_FIX: optional temporal conv to capture short-range dependencies
+        self.temporal_conv = nn.Conv1d(
+            input_size, input_size, kernel_size=3, padding=1
+        )
+
         # Bidirectional LSTM encodes temporal context
         self.lstm = nn.LSTM(
             input_size,
@@ -30,42 +35,33 @@ class QLSTMModel(nn.Module):
             bidirectional=True,
         )
 
-        lstm_hidden = hidden_size * 2
+        # FINAL_FIX: normalize full pooled output before slicing
+        self.norm = nn.LayerNorm(hidden_size * 2)
 
-        # Project to four features for the quantum layer
-        self.q_proj = nn.Linear(lstm_hidden, 4)
-
-        # NEW: normalize before feeding to quantum layer
-        self.norm = nn.LayerNorm(4)
-
-        # NEW: single shallow quantum layer for stability (tunable depth)
+        # FINAL_FIX: single shallow quantum layer for stability
         self.q_layer = QuantumLayer(n_layers=q_depth)
 
-        # NEW: simple self-attention over quantum outputs
-        self.attn = nn.Sequential(
-            nn.Linear(4, 4),
-            nn.Softmax(dim=-1),
-        )
-
-        # Classical readout
+        # Classical readout after quantum layer
         self.fc = nn.Linear(4, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # FINAL_FIX: temporal convolution over features
+        x = x.transpose(1, 2)
+        x = torch.relu(self.temporal_conv(x))
+        x = x.transpose(1, 2)
+
         # ``lstm_out`` has shape (batch, seq, hidden*2)
         lstm_out, _ = self.lstm(x)
 
-        # FIX: aggregate bidirectional outputs instead of last time step
+        # FINAL_FIX: temporal average pooling instead of last step
         pooled = torch.mean(lstm_out, dim=1)
+        pooled = self.norm(pooled)
 
-        # Quantum feature map
-        q_input = self.norm(self.q_proj(pooled))
+        # FINAL_FIX: slice first four features for quantum processing
+        q_input = pooled[:, :4]
         q_out = self.q_layer(q_input)
 
-        # NEW: apply attention weights
-        attn_weights = self.attn(q_out)
-        attn_out = q_out * attn_weights
-
-        return self.fc(attn_out)
+        return self.fc(q_out)
 
 
 def train_quantum_lstm(
