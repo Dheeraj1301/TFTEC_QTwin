@@ -45,10 +45,11 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Normalise to stabilise variance before entering the quantum circuit
             self.norm = nn.LayerNorm(4)
 
-            # Quantum layer with fixed shallow depth (2) to maintain stability.
-            # ``AngleEmbedding`` is implicitly implemented via rotations in the
-            # underlying ``QuantumLayer``.
-            self.q_layer = QuantumLayer(n_layers=max(1, min(q_depth, 2)))
+            # Quantum layer with fixed shallow depth (exactly two layers) to
+            # maintain stability.  ``AngleEmbedding`` is implicitly implemented
+            # via rotations inside :class:`QuantumLayer`.  ``q_depth`` remains in
+            # the signature for backward compatibility but is not used.
+            self.q_layer = QuantumLayer(n_layers=2)
 
             # Post-quantum head: Linear(4→32) → BatchNorm1d → GELU → Dropout → Linear(32→1)
             # ``hidden_dim`` is kept in the signature for compatibility but the
@@ -65,8 +66,8 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Input comes as (batch, seq, features); rearrange for Conv1d
             x = x.permute(0, 2, 1)
             x = self.input_proj(x)  # (batch, n_qubits, seq)
-            x = x.mean(dim=-1)  # aggregate over time -> (batch, n_qubits)
-            x = self.norm(x)  # ensure stable scale for quantum input
+            x = x.mean(dim=-1)  # temporal average, now (batch, n_qubits=4)
+            x = self.norm(x)  # normalise features prior to quantum layer
             x = self.q_layer(x)
             return self.classical_head(x)
 
