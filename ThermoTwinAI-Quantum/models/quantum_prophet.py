@@ -19,7 +19,7 @@ class QProphetModel(nn.Module):
     def __init__(
         self,
         num_features: int,
-        hidden_dim: int = 16,
+        hidden_dim: int = 32,
         q_depth: int = 2,
         dropout: float = 0.2,
     ) -> None:
@@ -28,20 +28,20 @@ class QProphetModel(nn.Module):
         # Project the input sequence to four features using a 1×1 convolution
         self.input_proj = nn.Conv1d(num_features, n_qubits, kernel_size=1)
 
-        # Normalize features before entering the quantum layer
-        self.norm = nn.LayerNorm(n_qubits)
+        # Normalise to stabilise variance before entering the quantum circuit
+        self.norm = nn.LayerNorm(4)
 
-        # Shallow quantum circuit
-        self.q_layer = QuantumLayer(n_layers=q_depth)
+        # Shallow quantum circuit with limited depth to avoid overfitting
+        self.q_layer = QuantumLayer(n_layers=min(q_depth, 3))
 
-        # Classical head: Linear -> BatchNorm1d -> ReLU
+        # Classical head: Linear -> BatchNorm1d -> ReLU -> Dropout -> Linear
         self.classical_head = nn.Sequential(
             nn.Linear(n_qubits, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
         )
-        self.dropout = nn.Dropout(dropout)
-        self.out = nn.Linear(hidden_dim, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Input comes as (batch, seq, features); rearrange for Conv1d
@@ -50,9 +50,7 @@ class QProphetModel(nn.Module):
         x = x.mean(dim=-1)  # aggregate over time -> (batch, n_qubits)
         x = self.norm(x)
         x = self.q_layer(x)
-        x = self.classical_head(x)
-        x = self.dropout(x)
-        return self.out(x)
+        return self.classical_head(x)
 
 
 def train_quantum_prophet(
@@ -61,7 +59,7 @@ def train_quantum_prophet(
     X_test,
     epochs: int = 50,
     lr: float = 0.005,
-    hidden_dim: int = 16,
+    hidden_dim: int = 32,
     q_depth: int = 2,
 ):
     """Train ``QProphetModel`` and return predictions for ``X_test``."""
