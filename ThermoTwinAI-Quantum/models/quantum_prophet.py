@@ -66,15 +66,25 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
                 nn.Linear(32, 1),
             )
 
+            # Bound the final prediction to [0, 1] (the range of the normalised
+            # target) which also helps to avoid inverted trends.
+            self.output_activation = nn.Sigmoid()
+
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Input comes as (batch, seq, features); rearrange for Conv1d
             x = x.permute(0, 2, 1)
             x = self.input_proj(x)  # (batch, n_qubits, seq)
-            x = x.mean(dim=-1)  # temporal average, now (batch, n_qubits=4)
+
+            # Use the most recent time step rather than averaging the entire
+            # window.  Averaging tended to blur the downward CoP trend and could
+            # result in predictions with inverted slope.
+            x = x[:, :, -1]
             x = self.norm(x)  # normalise features prior to quantum layer
+
             trend = self.residual_head(x)  # learn linear trend directly
             x = self.q_layer(x)
-            return self.classical_head(x) + trend  # combine quantum and classical paths
+            out = self.classical_head(x) + trend  # combine quantum and classical paths
+            return self.output_activation(out)
 
 
 def train_quantum_prophet(
