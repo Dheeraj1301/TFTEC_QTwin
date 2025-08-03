@@ -1,10 +1,10 @@
 """Quantum-enhanced LSTM model.
 
-The original implementation relied on averaging the LSTM outputs and a deep
-quantum circuit.  This revision follows a lighter design aimed at improving
-stability and forecasting accuracy.  The upgrades include a final-timestep
-representation with residual fusion, a shallower quantum layer and a simplified
-classical readout head.
+This file restores the simple architecture that previously yielded the best
+results.  The model feeds the final LSTM timestep directly into a shallow
+quantum layer.  A small classical head then produces the regression output.
+Stability is improved by normalising the quantum inputs while keeping the
+quantum circuit depth low.
 """
 
 import torch
@@ -19,11 +19,6 @@ class QLSTMModel(nn.Module):
     def __init__(self, input_size: int, hidden_size: int = 16, q_depth: int = 2) -> None:
         super().__init__()
 
-        # Optional convolution to encode short-range temporal patterns
-        self.temporal_conv = nn.Conv1d(
-            input_size, input_size, kernel_size=3, padding=1
-        )
-
         # Bidirectional LSTM to capture global temporal context
         self.lstm = nn.LSTM(
             input_size,
@@ -32,13 +27,10 @@ class QLSTMModel(nn.Module):
             bidirectional=True,
         )
 
-        # Projection used for residual fusion with final LSTM timestep
-        self.residual_proj = nn.Linear(input_size, hidden_size * 2)
-
         # LayerNorm stabilizes features before entering the quantum layer
         self.norm = nn.LayerNorm(4)
 
-        # Shallow quantum circuit with reduced entanglement depth
+        # Shallow quantum circuit with entanglement depth of two
         self.q_layer = QuantumLayer(n_layers=q_depth)
 
         # Lightweight classical head: Linear -> ReLU -> Linear
@@ -46,21 +38,12 @@ class QLSTMModel(nn.Module):
         self.fc2 = nn.Linear(8, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Temporal convolution operates over the feature dimension
-        x = x.transpose(1, 2)
-        x = torch.relu(self.temporal_conv(x))  # local time encoding
-        x = x.transpose(1, 2)
-
-        # Residual from the final input timestep projected to hidden dims
-        residual = self.residual_proj(x[:, -1, :])
-
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)
-        final = lstm_out[:, -1, :]  # last timestep output
-        fused = final + residual  # final timestep + residual fusion
+        final = lstm_out[:, -1, :]  # output of the final timestep
 
         # Normalize and pass only first four features to the quantum layer
-        q_input = self.norm(fused[:, :4])
+        q_input = self.norm(final[:, :4])
         q_out = self.q_layer(q_input)
 
         # Lightweight output head to avoid overfitting

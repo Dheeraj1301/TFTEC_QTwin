@@ -1,9 +1,10 @@
-"""Quantum-augmented NeuralProphet-style model with CNN preprocessing.
+"""Quantum-augmented NeuralProphet-style model.
 
-The original implementation flattened the entire input window and employed a
-deep quantum circuit.  This revision introduces a lightweight 1D CNN to extract
-temporal features and restricts the quantum component to a single layer for
-improved stability.
+This version removes recent experimental additions and reverts to the
+minimal design that previously achieved the best scores.  A simple
+projection reduces the input to four features which are normalised and fed
+to a shallow quantum circuit.  A lightweight classical head then predicts the
+target value.
 """
 
 import torch
@@ -13,53 +14,42 @@ from utils.quantum_layers import QuantumLayer
 
 
 class QProphetModel(nn.Module):
-    """1D CNN feature extractor followed by a quantum-enhanced regressor."""
+    """Linear projection into a quantum layer with a small classical head."""
 
     def __init__(
-        self, num_features: int, hidden_dim: int = 16, q_depth: int = 4
+        self,
+        num_features: int,
+        hidden_dim: int = 16,
+        q_depth: int = 2,
+        dropout: float = 0.1,
     ) -> None:
         super().__init__()
 
-        # CNN over the time dimension. Input shape: (batch, seq, features)
-        self.cnn = nn.Sequential(
-            nn.Conv1d(num_features, 8, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1),
-        )
+        # Project the input sequence to four features using a 1×1 convolution
+        self.input_proj = nn.Conv1d(num_features, 4, kernel_size=1)
 
-        # Projection to four quantum inputs
-        self.feature_proj = nn.Sequential(
-            nn.Linear(8, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 4),
-        )
+        # Normalize features before entering the quantum layer
+        self.norm = nn.LayerNorm(4)
 
-        # Quantum layer with increased entangling depth
+        # Shallow quantum circuit
         self.q_layer = QuantumLayer(n_layers=q_depth)
 
-        # Normalize quantum outputs before the classical head
-        self.norm = nn.BatchNorm1d(4)
-
-        # Deeper classical post-quantum head
+        # Classical head: Linear -> BatchNorm1d -> ReLU -> Dropout -> Linear
         self.classical_head = nn.Sequential(
-            nn.BatchNorm1d(4),
-            nn.Dropout(0.2),
-            nn.Linear(4, 16),
+            nn.Linear(4, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
-            nn.Linear(16, 8),
-            nn.ReLU(),
-            nn.Linear(8, 1),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Rearrange to (batch, channels, seq) for Conv1d
+        # Input comes as (batch, seq, features); rearrange for Conv1d
         x = x.permute(0, 2, 1)
-        cnn_out = self.cnn(x).squeeze(-1)  # (batch, 8)
-
-        x = self.feature_proj(cnn_out)
-        x = self.q_layer(x)
-        x = torch.tanh(x)
+        x = self.input_proj(x)  # (batch, 4, seq)
+        x = x.mean(dim=-1)  # aggregate over time -> (batch, 4)
         x = self.norm(x)
+        x = self.q_layer(x)
         return self.classical_head(x)
 
 
@@ -70,7 +60,7 @@ def train_quantum_prophet(
     epochs: int = 50,
     lr: float = 0.005,
     hidden_dim: int = 16,
-    q_depth: int = 4,
+    q_depth: int = 2,
 ):
     """Train ``QProphetModel`` and return predictions for ``X_test``."""
 
