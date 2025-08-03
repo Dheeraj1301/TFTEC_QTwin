@@ -1,10 +1,11 @@
-"""Quantum-enhanced LSTM model.
+"""Quantum-enhanced LSTM model with temporal attention.
 
-This file restores the simple architecture that previously yielded the best
-results.  The model feeds the final LSTM timestep directly into a shallow
-quantum layer.  A small classical head then produces the regression output.
-Stability is improved by normalising the quantum inputs while keeping the
-quantum circuit depth low.
+The original implementation relied solely on the final LSTM timestep.  Here a
+lightweight multi-head attention layer examines the entire sequence and a
+residual fusion combines the last state with the sequence mean.  The fused
+representation is normalised and passed through a shallow quantum circuit and a
+compact MLP head.  The goal is to improve correlation while remaining
+CPU-friendly.
 """
 
 import torch
@@ -14,7 +15,7 @@ from utils.quantum_layers import QuantumLayer, n_qubits
 
 
 class QLSTMModel(nn.Module):
-    """Unidirectional LSTM followed by a shallow quantum readout."""
+    """Unidirectional LSTM followed by attention, fusion and a quantum readout."""
 
     def __init__(
         self,
@@ -25,18 +26,14 @@ class QLSTMModel(nn.Module):
     ) -> None:
         super().__init__()
 
-        # Optional 1D convolution to smooth short-term fluctuations.  The
-        # convolution operates on the feature/channel dimension and preserves
-        # dimensionality so downstream interfaces remain unchanged.
-        #
-        # Renamed to ``conv1`` to clarify its temporal nature.
+        # Optional 1D convolution to smooth local temporal patterns.
         self.conv1 = (
             nn.Conv1d(input_size, input_size, kernel_size=3, padding=1)
             if use_conv
             else None
         )
 
-        # Single-directional LSTM; the last timestep alone is used as features
+        # Single-directional LSTM processing the sequence.
         self.lstm = nn.LSTM(
             input_size,
             hidden_size,
@@ -44,18 +41,21 @@ class QLSTMModel(nn.Module):
             bidirectional=False,
         )
 
-        # LayerNorm now operates on ``input_size`` (four features) before the
-        # quantum circuit as per the new specification.
-        self.input_size = input_size  # store for slicing
-        self.ln = nn.LayerNorm(input_size)
+        # Temporal attention to capture long-range dependencies.
+        self.attn = nn.MultiheadAttention(
+            embed_dim=hidden_size, num_heads=2, batch_first=True
+        )
 
-        # Quantum circuit with entanglement depth fixed to one layer
-        # (``q_depth`` kept for API compatibility).
+        # LayerNorm on the LSTM hidden dimension prior to the quantum layer.
+        self.ln = nn.LayerNorm(hidden_size)
+
+        # Quantum circuit with minimal entanglement (depth=1). ``q_depth`` is
+        # retained for API compatibility even though it is fixed.
         self.q_layer = QuantumLayer(n_layers=1)
 
-        # Updated output head: Linear(4→16) → ReLU → Linear(16→1)
+        # Output head: Linear(4→16) → GELU → Linear(16→1)
         self.fc1 = nn.Linear(n_qubits, 16)
-        self.act = nn.ReLU()
+        self.act = nn.GELU()
         self.fc2 = nn.Linear(16, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -67,19 +67,21 @@ class QLSTMModel(nn.Module):
             x = x.transpose(1, 2)
 
         # LSTM produces representations for each timestep
-        lstm_out, _ = self.lstm(x)
+        lstm_out, _ = self.lstm(x)  # (batch, seq, hidden)
 
-        # Use only the final timestep; removed residual/average pooling
-        last = lstm_out[:, -1, :]
+        # Attention emphasises informative timesteps
+        attn_out, _ = self.attn(lstm_out, lstm_out, lstm_out)
 
-        # Normalise features and select the qubit-sized subset
-        normed = self.ln(last[:, : self.input_size])
+        # Residual fusion: last timestep + mean over sequence
+        fused = attn_out[:, -1, :] + attn_out.mean(dim=1)
+
+        # Normalise and keep only the first n_qubits features for the QNode
+        normed = self.ln(fused)
         q_out = self.q_layer(normed[:, :n_qubits])
 
-        # Post-quantum MLP head followed by clamping to [-5, 5]
-        out = self.act(self.fc1(q_out))
-        out = self.fc2(out)
-        return torch.clamp(out, -5, 5)
+        # Post-quantum MLP head with output clamped to [-3, 3]
+        out = self.fc2(self.act(self.fc1(q_out)))
+        return torch.clamp(out, -3, 3)
 
 
 def train_quantum_lstm(
@@ -87,7 +89,7 @@ def train_quantum_lstm(
     y_train,
     X_test,
     epochs: int = 50,
-    lr: float = 0.005,
+    lr: float = 0.001,
     hidden_size: int = 16,
     q_depth: int = 2,
 ):
@@ -110,6 +112,7 @@ def train_quantum_lstm(
         output = model(X_train)
         loss = criterion(output, y_train)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         print(f"[QLSTM] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 
