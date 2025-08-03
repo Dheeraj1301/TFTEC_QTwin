@@ -23,6 +23,9 @@ def train_quantum_prophet(X_train, y_train, X_test, epochs=50, lr=0.005):
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
+    X_train = X_train.reshape(X_train.shape[0], -1)
+    X_test = X_test.reshape(X_test.shape[0], -1)
+
     X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
     X_test = torch.tensor(X_test, dtype=torch.float32).to(device)

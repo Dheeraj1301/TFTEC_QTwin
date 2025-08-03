@@ -5,15 +5,17 @@ from sklearn.preprocessing import MinMaxScaler
 
 def load_and_split_data(path, window_size=15):
     df = pd.read_csv(path)
-    data = df['CoP'].values.reshape(-1, 1)
+
+    feature_cols = [c for c in df.columns if c != "week"]
+    data = df[feature_cols].values
 
     scaler = MinMaxScaler()
     data = scaler.fit_transform(data)
 
     X, y = [], []
     for i in range(window_size, len(data)):
-        X.append(data[i-window_size:i, 0])
-        y.append(data[i, 0])
+        X.append(data[i - window_size : i, :])
+        y.append(data[i, 0])  # predict CoP
 
     X, y = np.array(X), np.array(y)
 
