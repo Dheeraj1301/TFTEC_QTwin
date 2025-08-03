@@ -45,6 +45,10 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Normalise to stabilise variance before entering the quantum circuit
             self.norm = nn.LayerNorm(4)
 
+            # Residual linear path to model direct classical trends and
+            # mitigate sign inversion observed in predictions
+            self.residual_head = nn.Linear(n_qubits, 1)
+
             # Quantum layer with fixed shallow depth (exactly two layers) to
             # maintain stability.  ``AngleEmbedding`` is implicitly implemented
             # via rotations inside :class:`QuantumLayer`.  ``q_depth`` remains in
@@ -68,8 +72,9 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             x = self.input_proj(x)  # (batch, n_qubits, seq)
             x = x.mean(dim=-1)  # temporal average, now (batch, n_qubits=4)
             x = self.norm(x)  # normalise features prior to quantum layer
+            trend = self.residual_head(x)  # learn linear trend directly
             x = self.q_layer(x)
-            return self.classical_head(x)
+            return self.classical_head(x) + trend  # combine quantum and classical paths
 
 
 def train_quantum_prophet(
