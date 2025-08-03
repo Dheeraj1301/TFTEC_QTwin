@@ -10,6 +10,8 @@ is to improve correlation while preserving CPU-level efficiency.
 
 from typing import Any
 
+from utils.drift_detection import DriftDetector
+
 try:  # pragma: no cover - executed only when deps are available
     import torch
     import torch.nn as nn
@@ -84,6 +86,7 @@ def train_quantum_prophet(
     lr: float = 0.001,
     hidden_dim: int = 32,
     q_depth: int = 2,
+    drift_detector: DriftDetector | None = None,
 ):
     """Train ``QProphetModel`` and return predictions for ``X_test``.
 
@@ -108,6 +111,31 @@ def train_quantum_prophet(
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
     X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
 
+    def adapt_model() -> None:
+        if drift_detector is None:
+            return
+        window = drift_detector.window_size
+        x_recent = X_train[-window:]
+        y_recent = y_train[-window:]
+        for name, param in model.named_parameters():
+            param.requires_grad = name in [
+                "classical_head.0.weight",
+                "classical_head.0.bias",
+                "classical_head.4.weight",
+                "classical_head.4.bias",
+            ]
+        adapt_opt = torch.optim.Adam(
+            filter(lambda p: p.requires_grad, model.parameters()), lr=lr
+        )
+        model.train()
+        adapt_opt.zero_grad()
+        out = model(x_recent)
+        adapt_loss = criterion(out, y_recent)
+        adapt_loss.backward()
+        adapt_opt.step()
+        for param in model.parameters():
+            param.requires_grad = True
+
     for epoch in range(epochs):
         model.train()
         optimizer.zero_grad()
@@ -116,6 +144,15 @@ def train_quantum_prophet(
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+
+        mae = torch.nn.functional.l1_loss(output, y_train).item()
+        if drift_detector is not None:
+            drift, prev, curr = drift_detector.update(mae)
+            if drift:
+                drift_detector.log("QProphet", epoch + 1, prev, curr)
+                print(f"[QProphet] Drift detected at epoch {epoch + 1}. Adapting...")
+                adapt_model()
+
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 
     # Evaluate correlation and error on training data for diagnostics
