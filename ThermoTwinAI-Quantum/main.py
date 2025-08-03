@@ -45,6 +45,8 @@ def main():
     parser.add_argument("--window", type=int, default=15, help="Sliding window size")
     parser.add_argument("--epochs", type=int, default=50, help="Training epochs")
     parser.add_argument("--lr", type=float, default=0.005, help="Learning rate")
+    parser.add_argument("--hidden", type=int, default=16, help="Hidden dimension")
+    parser.add_argument("--qdepth", type=int, default=8, help="Quantum layer depth")
     args = parser.parse_args()
 
     print("🚀 ThermoTwinAI-Quantum Forecasting Pipeline")
@@ -55,14 +57,24 @@ def main():
         "data/synthetic_tftec_cop.csv", window_size=args.window
     )
 
+    qlstm_cfg = {
+        "epochs": args.epochs,
+        "lr": args.lr,
+        "hidden_size": args.hidden,
+        "q_layers": args.qdepth,
+    }
     print("\n🔮 Training Quantum LSTM...")
-    qlstm_preds = train_quantum_lstm(
-        X_train, y_train, X_test, epochs=args.epochs, lr=args.lr
-    )
+    qlstm_preds = train_quantum_lstm(X_train, y_train, X_test, config=qlstm_cfg)
 
+    qprophet_cfg = {
+        "epochs": args.epochs,
+        "lr": args.lr,
+        "hidden_dim": args.hidden,
+        "q_layers": args.qdepth,
+    }
     print("\n📈 Training Quantum NeuralProphet...")
     qprophet_preds = train_quantum_prophet(
-        X_train, y_train, X_test, epochs=args.epochs, lr=args.lr
+        X_train, y_train, X_test, config=qprophet_cfg
     )
 
     print("\n📊 Evaluation:")
