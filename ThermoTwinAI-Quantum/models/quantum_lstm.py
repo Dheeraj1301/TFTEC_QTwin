@@ -28,7 +28,9 @@ class QLSTMModel(nn.Module):
         # Optional 1D convolution to smooth short-term fluctuations.  The
         # convolution operates on the feature/channel dimension and preserves
         # dimensionality so downstream interfaces remain unchanged.
-        self.conv = (
+        #
+        # Renamed to ``conv1`` to clarify its temporal nature.
+        self.conv1 = (
             nn.Conv1d(input_size, input_size, kernel_size=3, padding=1)
             if use_conv
             else None
@@ -42,11 +44,15 @@ class QLSTMModel(nn.Module):
             bidirectional=False,
         )
 
-        # LayerNorm stabilises feature scale before entering the quantum layer
-        self.norm = nn.LayerNorm(n_qubits)
+        # LayerNorm to stabilise the fused temporal features before the
+        # quantum layer.  ``hidden_size`` equals the dimensionality of the LSTM
+        # outputs and thus the residual fusion vector.
+        self.ln = nn.LayerNorm(hidden_size)
 
-        # Keep the quantum circuit extremely shallow (1–2 layers) for stability
-        self.q_layer = QuantumLayer(n_layers=max(1, min(q_depth, 2)))
+        # Quantum circuit depth is fixed at two layers to reduce overfitting and
+        # entanglement complexity as per the research specification.  ``q_depth``
+        # is kept for API compatibility but ignored internally.
+        self.q_layer = QuantumLayer(n_layers=2)
 
         # Post-quantum head: Linear(4→16) → GELU → Linear(16→1)
         self.fc1 = nn.Linear(n_qubits, 16)
@@ -55,22 +61,23 @@ class QLSTMModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Optional local smoothing via Conv1d
-        if self.conv is not None:
+        if self.conv1 is not None:
             # Conv1d expects (batch, channels, seq_len)
             x = x.transpose(1, 2)
-            x = self.conv(x)
+            x = self.conv1(x)
             x = x.transpose(1, 2)
 
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)
 
         # Residual fusion of final timestep with mean-pooled context
-        final = lstm_out[:, -1, :]
-        mean = lstm_out.mean(dim=1)
-        fused = final + mean
+        fused = lstm_out[:, -1, :] + lstm_out.mean(dim=1)
 
-        # Normalise and feed the first ``n_qubits`` features to the quantum layer
-        q_input = self.norm(fused[:, :n_qubits])
+        # Apply LayerNorm before slicing to the quantum-sized subset.  This
+        # stabilises the statistics of the temporal features without altering
+        # the model's external interface.
+        fused = self.ln(fused)
+        q_input = fused[:, :n_qubits]
         q_out = self.q_layer(q_input)
 
         # Post-quantum MLP head
