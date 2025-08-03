@@ -16,7 +16,7 @@ class QProphetModel(nn.Module):
     """1D CNN feature extractor followed by a quantum-enhanced regressor."""
 
     def __init__(
-        self, num_features: int, hidden_dim: int = 16, q_depth: int = 1
+        self, num_features: int, hidden_dim: int = 16, q_depth: int = 4
     ) -> None:
         super().__init__()
 
@@ -34,17 +34,19 @@ class QProphetModel(nn.Module):
             nn.Linear(hidden_dim, 4),
         )
 
-        # FINAL_FIX: normalize quantum inputs before circuit
-        self.norm = nn.LayerNorm(4)
-
-        # Quantum layer
+        # Quantum layer with increased entangling depth
         self.q_layer = QuantumLayer(n_layers=q_depth)
 
-        # FINAL_FIX: classical head for post-quantum processing
+        # Normalize quantum outputs before the classical head
+        self.norm = nn.LayerNorm(4)
+
+        # Deeper classical post-quantum head
         self.classical_head = nn.Sequential(
             nn.BatchNorm1d(4),
             nn.Dropout(0.2),
-            nn.Linear(4, 8),
+            nn.Linear(4, 16),
+            nn.ReLU(),
+            nn.Linear(16, 8),
             nn.ReLU(),
             nn.Linear(8, 1),
         )
@@ -54,9 +56,10 @@ class QProphetModel(nn.Module):
         x = x.permute(0, 2, 1)
         cnn_out = self.cnn(x).squeeze(-1)  # (batch, 8)
 
-        x = self.norm(self.feature_proj(cnn_out))
-        q_out = self.q_layer(x)
-        return self.classical_head(q_out)
+        x = self.feature_proj(cnn_out)
+        x = self.q_layer(x)
+        x = self.norm(x)
+        return self.classical_head(x)
 
 
 def train_quantum_prophet(
@@ -66,7 +69,7 @@ def train_quantum_prophet(
     epochs: int = 50,
     lr: float = 0.005,
     hidden_dim: int = 16,
-    q_depth: int = 1,
+    q_depth: int = 4,
 ):
     """Train ``QProphetModel`` and return predictions for ``X_test``."""
 
