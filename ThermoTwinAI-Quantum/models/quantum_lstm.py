@@ -35,11 +35,17 @@ class QLSTMModel(nn.Module):
             bidirectional=True,
         )
 
-        # FINAL_FIX: normalize full pooled output before slicing
-        self.norm = nn.LayerNorm(hidden_size * 2)
+        # Soft attention over LSTM outputs to preserve temporal signals
+        self.attention = nn.Linear(hidden_size * 2, 1)
+
+        # Normalize features passed to the quantum layer
+        self.norm = nn.LayerNorm(4)
 
         # FINAL_FIX: single shallow quantum layer for stability
         self.q_layer = QuantumLayer(n_layers=q_depth)
+
+        # Dropout regularization before classical readout
+        self.dropout = nn.Dropout(0.1)
 
         # Classical readout after quantum layer
         self.fc = nn.Linear(4, 1)
@@ -53,15 +59,16 @@ class QLSTMModel(nn.Module):
         # ``lstm_out`` has shape (batch, seq, hidden*2)
         lstm_out, _ = self.lstm(x)
 
-        # FINAL_FIX: temporal average pooling instead of last step
-        pooled = torch.mean(lstm_out, dim=1)
-        pooled = self.norm(pooled)
+        # Compute soft attention weights across the sequence dimension
+        attn_scores = self.attention(lstm_out)  # (batch, seq, 1)
+        attn_weights = torch.softmax(attn_scores, dim=1)
+        context = torch.sum(attn_weights * lstm_out, dim=1)
 
-        # FINAL_FIX: slice first four features for quantum processing
-        q_input = pooled[:, :4]
+        # Slice first four features and normalize before quantum processing
+        q_input = self.norm(context[:, :4])
         q_out = self.q_layer(q_input)
 
-        return self.fc(q_out)
+        return self.fc(self.dropout(q_out))
 
 
 def train_quantum_lstm(
