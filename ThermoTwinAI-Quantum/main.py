@@ -2,6 +2,7 @@
 from utils.preprocessing import load_and_split_data
 from models.quantum_lstm import train_quantum_lstm
 from models.quantum_prophet import train_quantum_prophet
+from utils.drift_detection import DriftDetector
 from evaluation.evaluate_models import evaluate_model
 import numpy as np
 import csv
@@ -55,14 +56,18 @@ def main():
         "data/synthetic_tftec_cop.csv", window_size=args.window
     )
 
+    drift_detector = DriftDetector(window_size=5, threshold=0.2)
+
     print("\n🔮 Training Quantum LSTM...")
     qlstm_preds = train_quantum_lstm(
-        X_train, y_train, X_test, epochs=args.epochs, lr=args.lr
+        X_train, y_train, X_test, epochs=args.epochs, lr=args.lr, drift_detector=drift_detector
     )
+
+    drift_detector.reset()
 
     print("\n📈 Training Quantum NeuralProphet...")
     qprophet_preds = train_quantum_prophet(
-        X_train, y_train, X_test, epochs=args.epochs, lr=args.lr
+        X_train, y_train, X_test, epochs=args.epochs, lr=args.lr, drift_detector=drift_detector
     )
 
     print("\n📊 Evaluation:")
