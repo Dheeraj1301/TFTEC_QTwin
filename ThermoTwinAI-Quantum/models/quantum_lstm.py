@@ -17,7 +17,9 @@ from utils.quantum_layers import QuantumLayer
 class QLSTMModel(nn.Module):
     """Minimal bidirectional LSTM with a quantum readout."""
 
-    def __init__(self, input_size: int, hidden_size: int = 16) -> None:
+    def __init__(
+        self, input_size: int, hidden_size: int = 16, q_depth: int = 1
+    ) -> None:
         super().__init__()
 
         # Bidirectional LSTM encodes temporal context
@@ -33,8 +35,17 @@ class QLSTMModel(nn.Module):
         # Project to four features for the quantum layer
         self.q_proj = nn.Linear(lstm_hidden, 4)
 
-        # Single shallow quantum layer for stability
-        self.q_layer = QuantumLayer(n_layers=1)
+        # NEW: normalize before feeding to quantum layer
+        self.norm = nn.LayerNorm(4)
+
+        # NEW: single shallow quantum layer for stability (tunable depth)
+        self.q_layer = QuantumLayer(n_layers=q_depth)
+
+        # NEW: simple self-attention over quantum outputs
+        self.attn = nn.Sequential(
+            nn.Linear(4, 4),
+            nn.Softmax(dim=-1),
+        )
 
         # Classical readout
         self.fc = nn.Linear(4, 1)
@@ -43,13 +54,18 @@ class QLSTMModel(nn.Module):
         # ``lstm_out`` has shape (batch, seq, hidden*2)
         lstm_out, _ = self.lstm(x)
 
-        # Use the last time step from the bidirectional LSTM
-        last_out = lstm_out[:, -1, :]
+        # FIX: aggregate bidirectional outputs instead of last time step
+        pooled = torch.mean(lstm_out, dim=1)
 
         # Quantum feature map
-        q_input = self.q_proj(last_out)
+        q_input = self.norm(self.q_proj(pooled))
         q_out = self.q_layer(q_input)
-        return self.fc(q_out)
+
+        # NEW: apply attention weights
+        attn_weights = self.attn(q_out)
+        attn_out = q_out * attn_weights
+
+        return self.fc(attn_out)
 
 
 def train_quantum_lstm(
@@ -59,12 +75,13 @@ def train_quantum_lstm(
     epochs: int = 50,
     lr: float = 0.005,
     hidden_size: int = 16,
+    q_depth: int = 1,
 ):
     """Train ``QLSTMModel`` and return predictions for ``X_test``."""
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_features = X_train.shape[2]
-    model = QLSTMModel(num_features, hidden_size=hidden_size).to(device)
+    model = QLSTMModel(num_features, hidden_size=hidden_size, q_depth=q_depth).to(device)
 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
