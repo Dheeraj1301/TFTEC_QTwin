@@ -36,7 +36,7 @@ class QLSTMModel(nn.Module):
             else None
         )
 
-        # Single-directional LSTM; final timestep is used as classical features
+        # Single-directional LSTM; the last timestep alone is used as features
         self.lstm = nn.LSTM(
             input_size,
             hidden_size,
@@ -44,19 +44,18 @@ class QLSTMModel(nn.Module):
             bidirectional=False,
         )
 
-        # LayerNorm to stabilise the fused temporal features before the
-        # quantum layer.  ``hidden_size`` equals the dimensionality of the LSTM
-        # outputs and thus the residual fusion vector.
-        self.ln = nn.LayerNorm(hidden_size)
+        # LayerNorm now operates on ``input_size`` (four features) before the
+        # quantum circuit as per the new specification.
+        self.input_size = input_size  # store for slicing
+        self.ln = nn.LayerNorm(input_size)
 
-        # Quantum circuit depth is fixed at two layers to reduce overfitting and
-        # entanglement complexity as per the research specification.  ``q_depth``
-        # is kept for API compatibility but ignored internally.
-        self.q_layer = QuantumLayer(n_layers=2)
+        # Quantum circuit with entanglement depth fixed to one layer
+        # (``q_depth`` kept for API compatibility).
+        self.q_layer = QuantumLayer(n_layers=1)
 
-        # Post-quantum head: Linear(4→16) → GELU → Linear(16→1)
+        # Updated output head: Linear(4→16) → ReLU → Linear(16→1)
         self.fc1 = nn.Linear(n_qubits, 16)
-        self.act = nn.GELU()
+        self.act = nn.ReLU()
         self.fc2 = nn.Linear(16, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -70,19 +69,17 @@ class QLSTMModel(nn.Module):
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)
 
-        # Residual fusion of final timestep with mean-pooled context
-        fused = lstm_out[:, -1, :] + lstm_out.mean(dim=1)
+        # Use only the final timestep; removed residual/average pooling
+        last = lstm_out[:, -1, :]
 
-        # Apply LayerNorm before slicing to the quantum-sized subset.  This
-        # stabilises the statistics of the temporal features without altering
-        # the model's external interface.
-        fused = self.ln(fused)
-        q_input = fused[:, :n_qubits]
-        q_out = self.q_layer(q_input)
+        # Normalise features and select the qubit-sized subset
+        normed = self.ln(last[:, : self.input_size])
+        q_out = self.q_layer(normed[:, :n_qubits])
 
-        # Post-quantum MLP head
+        # Post-quantum MLP head followed by clamping to [-5, 5]
         out = self.act(self.fc1(q_out))
-        return self.fc2(out)
+        out = self.fc2(out)
+        return torch.clamp(out, -5, 5)
 
 
 def train_quantum_lstm(
@@ -116,7 +113,17 @@ def train_quantum_lstm(
         optimizer.step()
         print(f"[QLSTM] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 
+    # Evaluate correlation and error on training data for diagnostics
     model.eval()
     with torch.no_grad():
+        train_preds = model(X_train).cpu()
         preds = model(X_test).cpu().numpy().flatten()
+
+    # Pearson correlation and MSE on training set
+    corr = float(torch.corrcoef(
+        torch.stack((train_preds.squeeze(), y_train.squeeze()))
+    )[0, 1])
+    mse = nn.functional.mse_loss(train_preds, y_train).item()
+    print(f"[QLSTM] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
+
     return preds
