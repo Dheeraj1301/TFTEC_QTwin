@@ -1,68 +1,92 @@
 """Quantum-augmented NeuralProphet-style model.
 
-This version removes recent experimental additions and reverts to the
-minimal design that previously achieved the best scores.  A simple
-projection reduces the input to four features which are normalised and fed
-to a shallow quantum circuit.  A lightweight classical head then predicts the
-target value.
+This module originally relied on heavy third-party libraries such as
+``torch`` and ``pennylane``.  Importing the file without those dependencies
+installed would raise an ``ImportError`` before the training helper function
+could be accessed, which in turn triggered the
+``ImportError: cannot import name 'train_quantum_prophet'`` message observed
+by users.  To make the failure mode clearer we attempt the imports lazily and
+provide a stub implementation when the dependencies are missing.
 """
 
-import torch
-import torch.nn as nn
+from typing import Any
 
-from utils.quantum_layers import QuantumLayer, n_qubits
+try:  # pragma: no cover - executed only when deps are available
+    import torch
+    import torch.nn as nn
+
+    from utils.quantum_layers import QuantumLayer, n_qubits
+except Exception as exc:  # pragma: no cover - used for graceful degradation
+    torch = None
+    nn = None
+    QuantumLayer = None  # type: ignore
+    n_qubits = 0  # type: ignore
+    _IMPORT_ERROR = exc
+else:  # pragma: no cover - executed only when deps are available
+    _IMPORT_ERROR = None
 
 
-class QProphetModel(nn.Module):
-    """Linear projection into a quantum layer with a small classical head."""
+if torch is not None:  # pragma: no cover - executed only when deps are available
+    class QProphetModel(nn.Module):
+        """Linear projection into a quantum layer with a small classical head."""
 
-    def __init__(
-        self,
-        num_features: int,
-        hidden_dim: int = 32,
-        q_depth: int = 2,
-        dropout: float = 0.2,
-    ) -> None:
-        super().__init__()
+        def __init__(
+            self,
+            num_features: int,
+            hidden_dim: int = 32,
+            q_depth: int = 2,
+            dropout: float = 0.2,
+        ) -> None:
+            super().__init__()
 
-        # Project the input sequence to four features using a 1×1 convolution
-        self.input_proj = nn.Conv1d(num_features, n_qubits, kernel_size=1)
+            # Project the input sequence to four features using a 1×1 convolution
+            self.input_proj = nn.Conv1d(num_features, n_qubits, kernel_size=1)
 
-        # Normalise to stabilise variance before entering the quantum circuit
-        self.norm = nn.LayerNorm(4)
+            # Normalise to stabilise variance before entering the quantum circuit
+            self.norm = nn.LayerNorm(4)
 
-        # Shallow quantum circuit with limited depth to avoid overfitting
-        self.q_layer = QuantumLayer(n_layers=min(q_depth, 3))
+            # Shallow quantum circuit with limited depth to avoid overfitting
+            self.q_layer = QuantumLayer(n_layers=min(q_depth, 3))
 
-        # Classical head: Linear -> BatchNorm1d -> ReLU -> Dropout -> Linear
-        self.classical_head = nn.Sequential(
-            nn.Linear(n_qubits, hidden_dim),
-            nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
-        )
+            # Classical head: Linear -> BatchNorm1d -> ReLU -> Dropout -> Linear
+            self.classical_head = nn.Sequential(
+                nn.Linear(n_qubits, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1),
+            )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Input comes as (batch, seq, features); rearrange for Conv1d
-        x = x.permute(0, 2, 1)
-        x = self.input_proj(x)  # (batch, n_qubits, seq)
-        x = x.mean(dim=-1)  # aggregate over time -> (batch, n_qubits)
-        x = self.norm(x)
-        x = self.q_layer(x)
-        return self.classical_head(x)
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            # Input comes as (batch, seq, features); rearrange for Conv1d
+            x = x.permute(0, 2, 1)
+            x = self.input_proj(x)  # (batch, n_qubits, seq)
+            x = x.mean(dim=-1)  # aggregate over time -> (batch, n_qubits)
+            x = self.norm(x)
+            x = self.q_layer(x)
+            return self.classical_head(x)
 
 
 def train_quantum_prophet(
-    X_train,
-    y_train,
-    X_test,
+    X_train: Any,
+    y_train: Any,
+    X_test: Any,
     epochs: int = 50,
     lr: float = 0.005,
     hidden_dim: int = 32,
     q_depth: int = 2,
 ):
-    """Train ``QProphetModel`` and return predictions for ``X_test``."""
+    """Train ``QProphetModel`` and return predictions for ``X_test``.
+
+    If the optional dependencies (``torch`` and ``pennylane``) are not
+    installed the function will raise a clear and immediate ``ImportError``
+    explaining which package is missing.
+    """
+
+    if torch is None or QuantumLayer is None:
+        raise ImportError(
+            "train_quantum_prophet requires `torch` and `pennylane` to be installed"
+        ) from _IMPORT_ERROR
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
