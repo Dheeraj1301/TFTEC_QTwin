@@ -27,25 +27,26 @@ class QProphetModel(nn.Module):
             nn.AdaptiveAvgPool1d(1),
         )
 
-        # NEW: MLP projection to four quantum inputs
+        # Projection to four quantum inputs
         self.feature_proj = nn.Sequential(
             nn.Linear(8, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 4),
         )
 
-        # NEW: normalize before quantum layer
+        # FINAL_FIX: normalize quantum inputs before circuit
         self.norm = nn.LayerNorm(4)
 
-        # NEW: single shallow quantum layer (tunable depth)
+        # Quantum layer
         self.q_layer = QuantumLayer(n_layers=q_depth)
 
-        # NEW: deeper classical head to reduce error
-        self.net = nn.Sequential(
-            nn.Linear(4, hidden_dim),
+        # FINAL_FIX: classical head for post-quantum processing
+        self.classical_head = nn.Sequential(
+            nn.BatchNorm1d(4),
             nn.Dropout(0.2),
+            nn.Linear(4, 8),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(8, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -55,7 +56,7 @@ class QProphetModel(nn.Module):
 
         x = self.norm(self.feature_proj(cnn_out))
         q_out = self.q_layer(x)
-        return self.net(q_out)
+        return self.classical_head(q_out)
 
 
 def train_quantum_prophet(
