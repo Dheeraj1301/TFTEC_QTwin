@@ -1,18 +1,35 @@
-# models/quantum_prophet.py
+"""Quantum-augmented NeuralProphet-style model with CNN preprocessing.
+
+The original implementation flattened the entire input window and employed a
+deep quantum circuit.  This revision introduces a lightweight 1D CNN to extract
+temporal features and restricts the quantum component to a single layer for
+improved stability.
+"""
+
 import torch
 import torch.nn as nn
+
 from utils.quantum_layers import QuantumLayer
 
 
 class QProphetModel(nn.Module):
-    """Feed-forward network augmented with a quantum feature map."""
+    """1D CNN feature extractor followed by a quantum-enhanced regressor."""
 
-    def __init__(self, input_size: int, hidden_dim: int = 16, q_layers: int = 8):
+    def __init__(self, num_features: int, hidden_dim: int = 16) -> None:
         super().__init__()
 
-        # Reduce the potentially large multivariate window into four features
-        self.feature_proj = nn.Linear(input_size, 4)
-        self.q_layer = QuantumLayer(n_layers=q_layers)
+        # CNN over the time dimension. Input shape: (batch, seq, features)
+        self.cnn = nn.Sequential(
+            nn.Conv1d(num_features, 8, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1),
+        )
+
+        # Map CNN features to the four quantum inputs
+        self.feature_proj = nn.Linear(8, 4)
+
+        # Single shallow quantum layer
+        self.q_layer = QuantumLayer(n_layers=1)
 
         # Classical post-processing of quantum outputs
         self.net = nn.Sequential(
@@ -22,7 +39,11 @@ class QProphetModel(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.feature_proj(x)
+        # Rearrange to (batch, channels, seq) for Conv1d
+        x = x.permute(0, 2, 1)
+        cnn_out = self.cnn(x).squeeze(-1)  # (batch, 8)
+
+        x = self.feature_proj(cnn_out)
         q_out = self.q_layer(x)
         return self.net(q_out)
 
@@ -34,18 +55,13 @@ def train_quantum_prophet(
     epochs: int = 50,
     lr: float = 0.005,
     hidden_dim: int = 16,
-    q_layers: int = 8,
 ):
-    """Train the ``QProphetModel`` and return predictions for ``X_test``."""
+    """Train ``QProphetModel`` and return predictions for ``X_test``."""
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Flatten windowed data to a single feature vector per sample
-    X_train = X_train.reshape(X_train.shape[0], -1)
-    X_test = X_test.reshape(X_test.shape[0], -1)
-    input_size = X_train.shape[1]
-
-    model = QProphetModel(input_size, hidden_dim=hidden_dim, q_layers=q_layers).to(device)
+    num_features = X_train.shape[2]
+    model = QProphetModel(num_features, hidden_dim=hidden_dim).to(device)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
