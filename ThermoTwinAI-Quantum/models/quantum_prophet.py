@@ -38,7 +38,7 @@ class QProphetModel(nn.Module):
         self.q_layer = QuantumLayer(n_layers=q_depth)
 
         # Normalize quantum outputs before the classical head
-        self.norm = nn.LayerNorm(4)
+        self.norm = nn.BatchNorm1d(4)
 
         # Deeper classical post-quantum head
         self.classical_head = nn.Sequential(
@@ -58,6 +58,7 @@ class QProphetModel(nn.Module):
 
         x = self.feature_proj(cnn_out)
         x = self.q_layer(x)
+        x = torch.tanh(x)
         x = self.norm(x)
         return self.classical_head(x)
 
