@@ -10,40 +10,40 @@ quantum circuit depth low.
 import torch
 import torch.nn as nn
 
-from utils.quantum_layers import QuantumLayer
+from utils.quantum_layers import QuantumLayer, n_qubits
 
 
 class QLSTMModel(nn.Module):
-    """Bidirectional LSTM followed by a shallow quantum readout."""
+    """Unidirectional LSTM followed by a shallow quantum readout."""
 
     def __init__(self, input_size: int, hidden_size: int = 16, q_depth: int = 2) -> None:
         super().__init__()
 
-        # Bidirectional LSTM to capture global temporal context
+        # Single-directional LSTM; final timestep is used as classical features
         self.lstm = nn.LSTM(
             input_size,
             hidden_size,
             batch_first=True,
-            bidirectional=True,
+            bidirectional=False,
         )
 
         # LayerNorm stabilizes features before entering the quantum layer
-        self.norm = nn.LayerNorm(4)
+        self.norm = nn.LayerNorm(n_qubits)
 
-        # Shallow quantum circuit with entanglement depth of two
+        # Shallow quantum circuit with fixed entanglement depth of two
         self.q_layer = QuantumLayer(n_layers=q_depth)
 
         # Lightweight classical head: Linear -> ReLU -> Linear
-        self.fc1 = nn.Linear(4, 8)
-        self.fc2 = nn.Linear(8, 1)
+        self.fc1 = nn.Linear(n_qubits, 32)
+        self.fc2 = nn.Linear(32, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)
         final = lstm_out[:, -1, :]  # output of the final timestep
 
-        # Normalize and pass only first four features to the quantum layer
-        q_input = self.norm(final[:, :4])
+        # Normalize and pass only first ``n_qubits`` features to the quantum layer
+        q_input = self.norm(final[:, :n_qubits])
         q_out = self.q_layer(q_input)
 
         # Lightweight output head to avoid overfitting
