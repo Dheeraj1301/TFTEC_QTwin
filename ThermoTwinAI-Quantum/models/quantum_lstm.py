@@ -1,55 +1,50 @@
-# models/quantum_lstm.py
+"""Quantum-enhanced LSTM model.
+
+This module implements a *stable* hybrid model composed of a bidirectional
+LSTM followed by a single quantum layer.  Previous experiments introduced
+deep/staked recurrent layers and attention mechanisms which degraded the
+forecasting performance.  Those components have been removed and the quantum
+circuit depth is constrained to a single layer to maintain simulation
+stability.
+"""
+
 import torch
 import torch.nn as nn
+
 from utils.quantum_layers import QuantumLayer
 
 
 class QLSTMModel(nn.Module):
-    """Quantum enhanced LSTM model.
+    """Minimal bidirectional LSTM with a quantum readout."""
 
-    A deeper/bidirectional LSTM encodes the temporal dynamics. The final
-    hidden state is projected down to four features which are passed through
-    a configurable quantum layer followed by a linear readout. An attention
-    mechanism is included to allow the network to emphasise informative time
-    steps.
-    """
-
-    def __init__(
-        self,
-        input_size: int,
-        hidden_size: int = 16,
-        num_layers: int = 2,
-        bidirectional: bool = True,
-        q_layers: int = 8,
-    ) -> None:
+    def __init__(self, input_size: int, hidden_size: int = 16) -> None:
         super().__init__()
 
-        self.bidirectional = bidirectional
-        lstm_hidden = hidden_size * (2 if bidirectional else 1)
-
-        # Stacked/bidirectional LSTM
+        # Bidirectional LSTM encodes temporal context
         self.lstm = nn.LSTM(
             input_size,
             hidden_size,
-            num_layers=num_layers,
             batch_first=True,
-            bidirectional=bidirectional,
+            bidirectional=True,
         )
 
-        # Simple self-attention over the time dimension
-        self.attn = nn.MultiheadAttention(lstm_hidden, num_heads=1, batch_first=True)
+        lstm_hidden = hidden_size * 2
 
-        # Project to the number of qubits expected by the quantum layer
+        # Project to four features for the quantum layer
         self.q_proj = nn.Linear(lstm_hidden, 4)
-        self.q_layer = QuantumLayer(n_layers=q_layers)
+
+        # Single shallow quantum layer for stability
+        self.q_layer = QuantumLayer(n_layers=1)
+
+        # Classical readout
         self.fc = nn.Linear(4, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # ``lstm_out`` has shape (batch, seq, hidden*2)
         lstm_out, _ = self.lstm(x)
 
-        # Attention emphasises informative time steps
-        attn_out, _ = self.attn(lstm_out, lstm_out, lstm_out)
-        last_out = attn_out[:, -1, :]
+        # Use the last time step from the bidirectional LSTM
+        last_out = lstm_out[:, -1, :]
 
         # Quantum feature map
         q_input = self.q_proj(last_out)
@@ -64,21 +59,12 @@ def train_quantum_lstm(
     epochs: int = 50,
     lr: float = 0.005,
     hidden_size: int = 16,
-    num_layers: int = 2,
-    bidirectional: bool = True,
-    q_layers: int = 8,
 ):
-    """Train the ``QLSTMModel`` and return predictions for ``X_test``."""
+    """Train ``QLSTMModel`` and return predictions for ``X_test``."""
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_features = X_train.shape[2]
-    model = QLSTMModel(
-        num_features,
-        hidden_size=hidden_size,
-        num_layers=num_layers,
-        bidirectional=bidirectional,
-        q_layers=q_layers,
-    ).to(device)
+    model = QLSTMModel(num_features, hidden_size=hidden_size).to(device)
 
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
