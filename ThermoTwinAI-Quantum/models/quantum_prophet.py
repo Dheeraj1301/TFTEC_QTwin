@@ -10,7 +10,7 @@ target value.
 import torch
 import torch.nn as nn
 
-from utils.quantum_layers import QuantumLayer
+from utils.quantum_layers import QuantumLayer, n_qubits
 
 
 class QProphetModel(nn.Module):
@@ -21,36 +21,38 @@ class QProphetModel(nn.Module):
         num_features: int,
         hidden_dim: int = 16,
         q_depth: int = 2,
-        dropout: float = 0.1,
+        dropout: float = 0.2,
     ) -> None:
         super().__init__()
 
         # Project the input sequence to four features using a 1×1 convolution
-        self.input_proj = nn.Conv1d(num_features, 4, kernel_size=1)
+        self.input_proj = nn.Conv1d(num_features, n_qubits, kernel_size=1)
 
         # Normalize features before entering the quantum layer
-        self.norm = nn.LayerNorm(4)
+        self.norm = nn.LayerNorm(n_qubits)
 
         # Shallow quantum circuit
         self.q_layer = QuantumLayer(n_layers=q_depth)
 
-        # Classical head: Linear -> BatchNorm1d -> ReLU -> Dropout -> Linear
+        # Classical head: Linear -> BatchNorm1d -> ReLU
         self.classical_head = nn.Sequential(
-            nn.Linear(4, hidden_dim),
+            nn.Linear(n_qubits, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
         )
+        self.dropout = nn.Dropout(dropout)
+        self.out = nn.Linear(hidden_dim, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Input comes as (batch, seq, features); rearrange for Conv1d
         x = x.permute(0, 2, 1)
-        x = self.input_proj(x)  # (batch, 4, seq)
-        x = x.mean(dim=-1)  # aggregate over time -> (batch, 4)
+        x = self.input_proj(x)  # (batch, n_qubits, seq)
+        x = x.mean(dim=-1)  # aggregate over time -> (batch, n_qubits)
         x = self.norm(x)
         x = self.q_layer(x)
-        return self.classical_head(x)
+        x = self.classical_head(x)
+        x = self.dropout(x)
+        return self.out(x)
 
 
 def train_quantum_prophet(
