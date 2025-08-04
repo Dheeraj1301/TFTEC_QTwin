@@ -110,7 +110,11 @@ def train_quantum_prophet(
     num_features = X_train.shape[2]
     model = QProphetModel(num_features, hidden_dim=hidden_dim, q_depth=q_depth).to(device)
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # AdamW with AMSGrad and a plateau scheduler provide "safe" optimisation
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, amsgrad=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, factor=0.5, patience=5, min_lr=1e-5
+    )
 
     X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
@@ -129,8 +133,8 @@ def train_quantum_prophet(
                 "classical_head.3.weight",
                 "classical_head.3.bias",
             ]
-        adapt_opt = torch.optim.Adam(
-            filter(lambda p: p.requires_grad, model.parameters()), lr=lr
+        adapt_opt = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()), lr=lr, amsgrad=True
         )
         adjust_learning_rate(adapt_opt, severity, lr)
         model.train()
@@ -150,6 +154,7 @@ def train_quantum_prophet(
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        scheduler.step(loss)
 
         mae = torch.nn.functional.l1_loss(output, y_train).item()
         if drift_detector is not None:

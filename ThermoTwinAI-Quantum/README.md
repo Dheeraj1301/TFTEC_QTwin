@@ -52,7 +52,9 @@ The Quantum NeuralProphet module began as a minimalist feed‑forward network ap
 reshapes each multivariate window into a flat vector and compresses it through `feature_proj = nn.Linear(input_size, 4)`,
 as seen in [`models/quantum_prophet.py`](models/quantum_prophet.py). Those four features enter a `QuantumLayer` with
 `q_layers=8` before being processed by a classical network of width `hidden_dim=16`. The accompanying `train_quantum_prophet`
-routine trains for 50 epochs with Adam at `lr=0.005`. During tuning, hidden dimensions {8,16,32} and quantum depths {4,8}
+routine trains for 50 epochs using an AdamW optimiser (`amsgrad=True`) with a
+ReduceLROnPlateau scheduler at `lr=0.005` for safer convergence. During tuning,
+hidden dimensions {8,16,32} and quantum depths {4,8}
 were evaluated; the selected combination provided the lowest validation error without overfitting. Flattening the window
 and projecting it into a compact quantum feature space proved particularly effective at integrating disparate sensor
 readings while controlling parameter count.
