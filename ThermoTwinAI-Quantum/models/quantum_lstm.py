@@ -46,11 +46,12 @@ class QLSTMModel(nn.Module):
         # LayerNorm on the LSTM hidden dimension prior to the quantum layer.
         self.ln = nn.LayerNorm(hidden_size)
 
-        # Quantum circuit with minimal entanglement depth (=1) and dropout
-        # afterwards to stabilise training. ``q_depth`` retained for API
-        # compatibility although the depth is fixed.
-        self.q_layer = QuantumLayer(n_layers=1)
-        self.q_dropout = nn.Dropout(0.1)
+        # Quantum circuit with minimal entanglement depth (1–2) and dropout
+        # afterwards to reduce overfitting when data augmentation is used. The
+        # ``q_depth`` argument is clamped to this safe range.
+        depth = max(1, min(q_depth, 2))
+        self.q_layer = QuantumLayer(n_layers=depth)
+        self.q_dropout = nn.Dropout(0.3)
 
         # Output head: Linear(4→16) → GELU → Linear(16→1)
         self.fc1 = nn.Linear(n_qubits, 16)

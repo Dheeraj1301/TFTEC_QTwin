@@ -57,6 +57,11 @@ def main():
         action="store_true",
         help="Enable z-score drift masking for training data",
     )
+    parser.add_argument(
+        "--use_augmentation",
+        action="store_true",
+        help="Apply time series augmentation to training data",
+    )
     args = parser.parse_args()
 
     if args.lr is None:
@@ -69,7 +74,9 @@ def main():
     df = pd.read_csv("data/synthetic_tftec_cop.csv")
 
     X_train, y_train, X_test, y_test = load_and_split_data(
-        "data/synthetic_tftec_cop.csv", window_size=args.window
+        "data/synthetic_tftec_cop.csv",
+        window_size=args.window,
+        use_augmentation=args.use_augmentation,
     )
 
     if args.use_drift:
