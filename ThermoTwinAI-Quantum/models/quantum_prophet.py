@@ -16,6 +16,7 @@ try:  # pragma: no cover - executed only when deps are available
     import numpy as np
     import torch
     import torch.nn as nn
+    import torch.nn.functional as F
 
     from utils.quantum_layers import QuantumLayer, n_qubits
 except Exception as exc:  # pragma: no cover - used for graceful degradation
@@ -47,34 +48,44 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
                 nn.Conv1d(num_features, n_qubits, kernel_size=3, padding=1),
                 nn.GELU(),
             )
+            self.cnn_dropout = nn.Dropout(dropout)
 
             # Normalise to stabilise variance before entering the quantum circuit
             # Explicitly use four features as required by the QNode
             self.norm = nn.LayerNorm(4)
 
-            # Quantum layer with configurable depth
+            # Quantum layer with configurable depth and dropout afterwards
             self.q_layer = QuantumLayer(n_layers=q_depth)
             self.q_dropout = nn.Dropout(dropout)
 
-            # Post-QNode MLP: Linear(4→hidden_dim) → GELU → Dropout → Linear(hidden_dim→1)
-            self.classical_head = nn.Sequential(
-                nn.Linear(n_qubits, hidden_dim),
-                nn.GELU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, 1),
-            )
+            # Post-QNode MLP broken into explicit layers to control dropout
+            self.fc1 = nn.Linear(n_qubits, hidden_dim)
+            self.act = nn.GELU()
+            self.fc1_dropout = nn.Dropout(dropout)
+            self.fc2 = nn.Linear(hidden_dim, 1)
 
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
+        def forward(self, x: torch.Tensor, mc_dropout: bool = False) -> torch.Tensor:
             # Input comes as (batch, seq, features); rearrange for Conv1d
             x = x.permute(0, 2, 1)
             x = self.pre_q(x)  # conv + GELU -> (batch, n_qubits, seq)
+            x = F.dropout(
+                x, p=self.cnn_dropout.p, training=self.training or mc_dropout
+            )
 
             # Mean pooling over timesteps then normalise before quantum layer
             x = x.mean(dim=2)
             x = self.norm(x)
             residual = x
-            x = self.q_dropout(self.q_layer(x)) + residual
-            out = self.classical_head(x)
+            x = self.q_layer(x)
+            x = F.dropout(
+                x, p=self.q_dropout.p, training=self.training or mc_dropout
+            )
+            x = x + residual
+            x = self.act(self.fc1(x))
+            x = F.dropout(
+                x, p=self.fc1_dropout.p, training=self.training or mc_dropout
+            )
+            out = self.fc2(x)
             return torch.clamp(out, -3, 3)
 
 
@@ -88,7 +99,7 @@ def train_quantum_prophet(
     q_depth: int = 2,
     drift_detector: DriftDetector | None = None,
 ):
-    """Train ``QProphetModel`` and return predictions for ``X_test``.
+    """Train ``QProphetModel`` and return the model with predictions for ``X_test``.
 
     If the optional dependencies (``torch`` and ``pennylane``) are not
     installed the function will raise a clear and immediate ``ImportError``
@@ -136,10 +147,10 @@ def train_quantum_prophet(
         y_recent = y_train[-window:]
         for name, param in model.named_parameters():
             param.requires_grad = name in [
-                "classical_head.0.weight",
-                "classical_head.0.bias",
-                "classical_head.3.weight",
-                "classical_head.3.bias",
+                "fc1.weight",
+                "fc1.bias",
+                "fc2.weight",
+                "fc2.bias",
             ]
         adapt_opt = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, model.parameters()),
@@ -194,4 +205,4 @@ def train_quantum_prophet(
 
     print(f"[QProphet] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
 
-    return preds
+    return model, preds
