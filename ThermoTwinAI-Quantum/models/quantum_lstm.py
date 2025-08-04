@@ -26,6 +26,7 @@ class QLSTMModel(nn.Module):
         hidden_size: int = 16,
         q_depth: int = 2,
         use_conv: bool = False,
+        dropout: float = 0.1,
     ) -> None:
         super().__init__()
 
@@ -49,14 +50,14 @@ class QLSTMModel(nn.Module):
 
         # Dropout directly on the LSTM representations and after the quantum
         # layer supports Monte Carlo Dropout for uncertainty estimates.
-        self.lstm_dropout = nn.Dropout(0.3)
+        self.lstm_dropout = nn.Dropout(dropout)
 
         # Quantum circuit with minimal entanglement depth (1–2) and dropout
         # afterwards to reduce overfitting when data augmentation is used. The
         # ``q_depth`` argument is clamped to this safe range.
         depth = max(1, min(q_depth, 2))
         self.q_layer = QuantumLayer(n_layers=depth)
-        self.q_dropout = nn.Dropout(0.3)
+        self.q_dropout = nn.Dropout(dropout)
 
         # Output head: Linear(4→16) → GELU → Linear(16→1)
         self.fc1 = nn.Linear(n_qubits, 16)
@@ -102,8 +103,10 @@ def train_quantum_lstm(
     lr: float = 0.001,
     hidden_size: int = 16,
     q_depth: int = 2,
+    dropout: float = 0.1,
     drift_detector: DriftDetector | None = None,
-    ):
+    patience: int = 10,
+) -> tuple[nn.Module, np.ndarray]:
     """Train ``QLSTMModel`` and return the model with predictions for ``X_test``."""
     torch.manual_seed(42)
     np.random.seed(42)
@@ -113,9 +116,11 @@ def train_quantum_lstm(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_features = X_train.shape[2]
-    model = QLSTMModel(num_features, hidden_size=hidden_size, q_depth=q_depth).to(device)
+    model = QLSTMModel(
+        num_features, hidden_size=hidden_size, q_depth=q_depth, dropout=dropout
+    ).to(device)
 
-    criterion = nn.MSELoss()
+    criterion = nn.L1Loss()
     # AdamW with weight decay and AMSGrad along with a plateau scheduler
     # provides "safe" optimisation comparable to the QProphet setup.
     optimizer = torch.optim.AdamW(
@@ -155,6 +160,9 @@ def train_quantum_lstm(
         for param in model.parameters():
             param.requires_grad = True
 
+    best_mae = float("inf")
+    epochs_no_improve = 0
+
     for epoch in range(epochs):
         model.train()
         optimizer.zero_grad()
@@ -164,8 +172,16 @@ def train_quantum_lstm(
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        mae = torch.nn.functional.l1_loss(output, y_train).item()
+        mae = loss.item()
         scheduler.step(mae)
+        if mae < best_mae - 1e-4:
+            best_mae = mae
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print("[QLSTM] Early stopping")
+                break
         if drift_detector is not None:
             drift, prev, curr = drift_detector.update(mae)
             if drift:

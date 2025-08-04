@@ -2,6 +2,9 @@
 
 This project uses quantum-classical forecasting models to analyze degradation in TFTECs.
 
+The training utilities include configurable dropout rates and MAE-based early
+stopping to provide safer convergence when modelling noisy sensor data.
+
 ## Prototype Evolution
 Initial experiments relied on univariate signals. The latest prototype incorporates multi-sensor inputs and hyperparameter tuning, yielding the following changes:
 

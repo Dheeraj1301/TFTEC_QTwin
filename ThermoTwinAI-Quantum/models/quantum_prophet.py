@@ -39,7 +39,7 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             num_features: int,
             hidden_dim: int = 32,
             q_depth: int = 2,
-            dropout: float = 0.2,
+            dropout: float = 0.1,
         ) -> None:
             super().__init__()
 
@@ -97,8 +97,10 @@ def train_quantum_prophet(
     lr: float = 0.001,
     hidden_dim: int = 32,
     q_depth: int = 2,
+    dropout: float = 0.1,
     drift_detector: DriftDetector | None = None,
-):
+    patience: int = 10,
+) -> tuple[Any, Any]:
     """Train ``QProphetModel`` and return the model with predictions for ``X_test``.
 
     If the optional dependencies (``torch`` and ``pennylane``) are not
@@ -120,9 +122,9 @@ def train_quantum_prophet(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     num_features = X_train.shape[2]
-    model = QProphetModel(num_features, hidden_dim=hidden_dim, q_depth=q_depth).to(
-        device
-    )
+    model = QProphetModel(
+        num_features, hidden_dim=hidden_dim, q_depth=q_depth, dropout=dropout
+    ).to(device)
     # Optimise the mean absolute error directly to promote stable,
     # directionally consistent predictions
     criterion = nn.L1Loss()
@@ -169,6 +171,9 @@ def train_quantum_prophet(
         for param in model.parameters():
             param.requires_grad = True
 
+    best_mae = float("inf")
+    epochs_no_improve = 0
+
     for epoch in range(epochs):
         model.train()
         optimizer.zero_grad()
@@ -180,6 +185,14 @@ def train_quantum_prophet(
         # Step the scheduler on the MAE to align with the evaluation metric
         mae = loss.item()
         scheduler.step(mae)
+        if mae < best_mae - 1e-4:
+            best_mae = mae
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print("[QProphet] Early stopping")
+                break
         if drift_detector is not None:
             drift, prev, curr = drift_detector.update(mae)
             if drift:
