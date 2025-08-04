@@ -27,16 +27,28 @@ def evaluate_model(
     y_pred = np.ravel(y_pred)
 
     # Metrics computed with numpy to avoid external dependencies
-    mae = np.mean(np.abs(y_true - y_pred))
-    rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
-    mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8)))
-    ss_res = np.sum((y_true - y_pred) ** 2)
-    ss_tot = np.sum((y_true - y_true.mean()) ** 2) + 1e-8
+    diff = y_true - y_pred
+    abs_diff = np.abs(diff)
+    sq_diff = diff * diff
+
+    mae = abs_diff.mean()
+    rmse = np.sqrt(sq_diff.mean())
+    mape = (abs_diff / (np.abs(y_true) + 1e-8)).mean()
+
+    ss_res = sq_diff.sum()
+    y_true_mean = y_true.mean()
+    ss_tot = np.sum((y_true - y_true_mean) ** 2) + 1e-8
     r2 = max(0.0, 1 - ss_res / ss_tot)
-    if y_true.std() == 0 or y_pred.std() == 0:
+
+    std_true = y_true.std()
+    std_pred = y_pred.std()
+    if std_true == 0 or std_pred == 0:
         corr = 0.0
     else:
-        corr = abs(np.corrcoef(y_true, y_pred)[0, 1])
+        corr = abs(
+            np.dot(y_true - y_true_mean, y_pred - y_pred.mean())
+            / (y_true.size * std_true * std_pred)
+        )
 
     print(f"📌 {name} Evaluation")
     print(f"   MAE     = {mae:.6f}")
