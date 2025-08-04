@@ -29,6 +29,7 @@ else:  # pragma: no cover - executed only when deps are available
 
 
 if torch is not None:  # pragma: no cover - executed only when deps are available
+
     class QProphetModel(nn.Module):
         """1D CNN features, quantum layer and a compact classical head."""
 
@@ -108,8 +109,12 @@ def train_quantum_prophet(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     num_features = X_train.shape[2]
-    model = QProphetModel(num_features, hidden_dim=hidden_dim, q_depth=q_depth).to(device)
-    criterion = nn.MSELoss()
+    model = QProphetModel(num_features, hidden_dim=hidden_dim, q_depth=q_depth).to(
+        device
+    )
+    # Optimise the mean absolute error directly to promote stable,
+    # directionally consistent predictions
+    criterion = nn.L1Loss()
     # AdamW with weight decay, AMSGrad and a plateau scheduler provide
     # "safe" optimisation
     optimizer = torch.optim.AdamW(
@@ -165,9 +170,9 @@ def train_quantum_prophet(
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        scheduler.step(loss)
-
-        mae = torch.nn.functional.l1_loss(output, y_train).item()
+        # Step the scheduler on the MAE to align with the early-stopping metric
+        mae = loss.item()
+        scheduler.step(mae)
         if drift_detector is not None:
             drift, prev, curr = drift_detector.update(mae)
             if drift:
@@ -186,7 +191,7 @@ def train_quantum_prophet(
                 print(f"[QProphet] Early stopping at epoch {epoch + 1}")
                 break
 
-        print(f"[QProphet] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
+        print(f"[QProphet] Epoch {epoch + 1}/{epochs} - MAE: {mae:.6f}")
 
     # Evaluate correlation and error on training data for diagnostics
     model.eval()
@@ -194,9 +199,9 @@ def train_quantum_prophet(
         train_preds = model(X_train).cpu()
         preds = model(X_test).cpu().numpy().flatten()
 
-    corr = float(torch.corrcoef(
-        torch.stack((train_preds.squeeze(), y_train.squeeze()))
-    )[0, 1])
+    corr = float(
+        torch.corrcoef(torch.stack((train_preds.squeeze(), y_train.squeeze())))[0, 1]
+    )
     mse = nn.functional.mse_loss(train_preds, y_train).item()
     print(f"[QProphet] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
 
