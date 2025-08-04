@@ -4,11 +4,13 @@ from models.quantum_lstm import train_quantum_lstm
 from models.quantum_prophet import train_quantum_prophet
 from utils.drift_detection import DriftDetector, detect_drift, apply_drift_mask
 from evaluation.evaluate_models import evaluate_model
+from utils.uncertainty import mc_dropout_predict
 import numpy as np
 import csv
 import os
 import argparse
 import pandas as pd
+import torch
 
 def generate_tftec_cop_data(n_weeks: int = 156):
     """Create a synthetic multivariate dataset with simple degradation effects."""
@@ -62,6 +64,11 @@ def main():
         action="store_true",
         help="Apply time series augmentation to training data",
     )
+    parser.add_argument(
+        "--use_uq",
+        action="store_true",
+        help="Enable Monte Carlo Dropout uncertainty estimation",
+    )
     args = parser.parse_args()
 
     if args.lr is None:
@@ -88,20 +95,53 @@ def main():
     drift_detector = DriftDetector(window_size=5, threshold=0.2)
 
     print("\n🔮 Training Quantum LSTM...")
-    qlstm_preds = train_quantum_lstm(
+    qlstm_model, qlstm_preds = train_quantum_lstm(
         X_train, y_train, X_test, epochs=args.epochs, lr=args.lr, drift_detector=drift_detector
     )
 
     drift_detector.reset()
 
     print("\n📈 Training Quantum NeuralProphet...")
-    qprophet_preds = train_quantum_prophet(
+    qprophet_model, qprophet_preds = train_quantum_prophet(
         X_train, y_train, X_test, epochs=args.epochs, lr=args.lr, drift_detector=drift_detector
     )
 
     print("\n📊 Evaluation:")
-    evaluate_model(y_test, qlstm_preds, name="Quantum LSTM", plot=True)
-    evaluate_model(y_test, qprophet_preds, name="Quantum NeuralProphet", plot=True)
+    if args.use_uq:
+        X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
+        mean_lstm, lower_lstm, upper_lstm, std_lstm = mc_dropout_predict(
+            qlstm_model, X_test_tensor
+        )
+        mean_prophet, lower_prophet, upper_prophet, std_prophet = mc_dropout_predict(
+            qprophet_model, X_test_tensor
+        )
+        for i in range(min(5, len(mean_lstm))):
+            print(
+                f"[QLSTM] Sample {i}: {mean_lstm.flatten()[i]:.3f} ± {1.96 * std_lstm.flatten()[i]:.3f}"
+            )
+        for i in range(min(5, len(mean_prophet))):
+            print(
+                f"[QProphet] Sample {i}: {mean_prophet.flatten()[i]:.3f} ± {1.96 * std_prophet.flatten()[i]:.3f}"
+            )
+        evaluate_model(
+            y_test,
+            mean_lstm.flatten(),
+            name="Quantum LSTM",
+            plot=True,
+            lower=lower_lstm.flatten(),
+            upper=upper_lstm.flatten(),
+        )
+        evaluate_model(
+            y_test,
+            mean_prophet.flatten(),
+            name="Quantum NeuralProphet",
+            plot=True,
+            lower=lower_prophet.flatten(),
+            upper=upper_prophet.flatten(),
+        )
+    else:
+        evaluate_model(y_test, qlstm_preds, name="Quantum LSTM", plot=True)
+        evaluate_model(y_test, qprophet_preds, name="Quantum NeuralProphet", plot=True)
 
 if __name__ == "__main__":
     main()

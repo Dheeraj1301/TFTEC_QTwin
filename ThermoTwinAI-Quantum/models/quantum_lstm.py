@@ -11,6 +11,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from utils.quantum_layers import QuantumLayer, n_qubits
 from utils.drift_detection import DriftDetector, adjust_learning_rate
@@ -46,6 +47,10 @@ class QLSTMModel(nn.Module):
         # LayerNorm on the LSTM hidden dimension prior to the quantum layer.
         self.ln = nn.LayerNorm(hidden_size)
 
+        # Dropout directly on the LSTM representations and after the quantum
+        # layer supports Monte Carlo Dropout for uncertainty estimates.
+        self.lstm_dropout = nn.Dropout(0.3)
+
         # Quantum circuit with minimal entanglement depth (1–2) and dropout
         # afterwards to reduce overfitting when data augmentation is used. The
         # ``q_depth`` argument is clamped to this safe range.
@@ -58,7 +63,7 @@ class QLSTMModel(nn.Module):
         self.act = nn.GELU()
         self.fc2 = nn.Linear(16, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mc_dropout: bool = False) -> torch.Tensor:
         # Optional local smoothing via Conv1d
         if self.conv1 is not None:
             # Conv1d expects (batch, channels, seq_len)
@@ -68,6 +73,9 @@ class QLSTMModel(nn.Module):
 
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)  # (batch, seq, hidden)
+        lstm_out = F.dropout(
+            lstm_out, p=self.lstm_dropout.p, training=self.training or mc_dropout
+        )
 
         # Residual fusion: average of last timestep and mean over sequence
         final = lstm_out[:, -1, :]
@@ -77,7 +85,9 @@ class QLSTMModel(nn.Module):
         # Normalise and keep only the first n_qubits features for the QNode
         normed = self.ln(fused)
         q_out = self.q_layer(normed[:, :n_qubits])
-        q_out = self.q_dropout(q_out)
+        q_out = F.dropout(
+            q_out, p=self.q_dropout.p, training=self.training or mc_dropout
+        )
 
         # Post-quantum MLP head with output clamped to [-3, 3]
         out = self.fc2(self.act(self.fc1(q_out)))
@@ -93,8 +103,8 @@ def train_quantum_lstm(
     hidden_size: int = 16,
     q_depth: int = 2,
     drift_detector: DriftDetector | None = None,
-):
-    """Train ``QLSTMModel`` and return predictions for ``X_test``."""
+    ):
+    """Train ``QLSTMModel`` and return the model with predictions for ``X_test``."""
     torch.manual_seed(42)
     np.random.seed(42)
     random.seed(42)
@@ -180,4 +190,4 @@ def train_quantum_lstm(
     mse = nn.functional.mse_loss(train_preds, y_train).item()
     print(f"[QLSTM] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
 
-    return preds
+    return model, preds
