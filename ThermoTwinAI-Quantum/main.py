@@ -96,14 +96,28 @@ def main():
 
     print("\n🔮 Training Quantum LSTM...")
     qlstm_model, qlstm_preds = train_quantum_lstm(
-        X_train, y_train, X_test, epochs=args.epochs, lr=args.lr, drift_detector=drift_detector
+        X_train,
+        y_train,
+        X_test,
+        epochs=args.epochs,
+        lr=args.lr,
+        hidden_size=32,
+        dropout=0.1,
+        drift_detector=drift_detector,
     )
 
     drift_detector.reset()
 
     print("\n📈 Training Quantum NeuralProphet...")
     qprophet_model, qprophet_preds = train_quantum_prophet(
-        X_train, y_train, X_test, epochs=args.epochs, lr=args.lr, drift_detector=drift_detector
+        X_train,
+        y_train,
+        X_test,
+        epochs=args.epochs,
+        lr=args.lr,
+        hidden_dim=64,
+        dropout=0.1,
+        drift_detector=drift_detector,
     )
 
     print("\n📊 Evaluation:")
