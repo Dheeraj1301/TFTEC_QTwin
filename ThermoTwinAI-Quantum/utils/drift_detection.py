@@ -4,6 +4,57 @@ import time
 from typing import List, Tuple, Optional
 
 import numpy as np
+import pandas as pd
+
+
+def detect_drift(series: pd.Series, window: int = 10, threshold: float = 2.0):
+    """Flag drifts in a time series via rolling z-scores.
+
+    A rolling mean and standard deviation are computed over ``window`` samples.
+    Samples whose absolute z-score exceeds ``threshold`` are marked as drift
+    (1) while the rest are 0. NaNs from the initial window are safely
+    initialised to 0.
+    """
+
+    rolling_mean = series.rolling(window).mean()
+    rolling_std = series.rolling(window).std()
+    z_scores = (series - rolling_mean) / (rolling_std + 1e-6)
+    drift_flags = (z_scores.abs() > threshold).astype(int)
+    return drift_flags.fillna(0).astype(int)
+
+
+def apply_drift_mask(X, y, drift_flags, window: int):
+    """Remove samples whose end timestep is flagged as drift.
+
+    Parameters
+    ----------
+    X, y : arrays
+        Windowed training data produced by ``load_and_split_data``.
+    drift_flags : Series or array
+        Binary flags for each original timestep in the dataset.
+    window : int
+        Window size used to create ``X`` and ``y``. Required for alignment.
+    """
+
+    flags = np.asarray(drift_flags)[window:]
+    flags = flags[: len(X)]
+    mask = flags == 0
+    return X[mask], y[mask]
+
+
+def adjust_learning_rate(optimizer, severity: Optional[float], base_lr: float, min_lr: float = 1e-5):
+    """Scale the learning rate based on drift severity.
+
+    ``severity`` can be any positive number (e.g. max z-score). Larger values
+    yield a smaller learning rate down to ``min_lr``.
+    """
+
+    if optimizer is None or severity is None:
+        return
+    factor = 1.0 / (1.0 + float(severity))
+    new_lr = max(base_lr * factor, min_lr)
+    for group in optimizer.param_groups:
+        group["lr"] = new_lr
 
 
 class DriftDetector:
