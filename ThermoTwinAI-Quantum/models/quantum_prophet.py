@@ -129,11 +129,6 @@ def train_quantum_prophet(
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
     X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
 
-    # Early stopping to curb overfitting based on MAE
-    best_mae = float("inf")
-    epochs_no_improve = 0
-    patience = 10
-
     def adapt_model(severity: float | None = None) -> None:
         if drift_detector is None:
             return
@@ -171,7 +166,7 @@ def train_quantum_prophet(
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        # Step the scheduler on the MAE to align with the early-stopping metric
+        # Step the scheduler on the MAE to align with the evaluation metric
         mae = loss.item()
         scheduler.step(mae)
         if drift_detector is not None:
@@ -182,15 +177,6 @@ def train_quantum_prophet(
                 drift_detector.log("QProphet", epoch + 1, prev, curr)
                 print(f"[QProphet] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model(severity)
-
-        if mae < best_mae - 1e-6:
-            best_mae = mae
-            epochs_no_improve = 0
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"[QProphet] Early stopping at epoch {epoch + 1}")
-                break
 
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - MAE: {mae:.6f}")
 
@@ -203,21 +189,6 @@ def train_quantum_prophet(
         torch.corrcoef(torch.stack((train_preds.squeeze(), y_train.squeeze())))[0, 1]
     )
     mse = nn.functional.mse_loss(train_preds, y_train).item()
-
-    if corr < 0:
-        with torch.no_grad():
-            layer = model.classical_head[-1]
-            layer.weight.mul_(-1)
-            layer.bias.mul_(-1)
-            train_preds = model(X_train).cpu()
-            corr = float(
-                torch.corrcoef(
-                    torch.stack((train_preds.squeeze(), y_train.squeeze()))
-                )[0, 1]
-            )
-            mse = nn.functional.mse_loss(train_preds, y_train).item()
-        print("[QProphet] Output weights flipped to enforce positive correlation.")
-
     with torch.no_grad():
         preds = model(X_test).cpu().numpy().flatten()
 
