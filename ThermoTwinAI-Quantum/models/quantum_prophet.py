@@ -1,25 +1,26 @@
 """Quantum-augmented NeuralProphet-style model.
 
 The file lazily imports ``torch`` and ``pennylane`` so that the training helper
-remains importable even when the heavy dependencies are absent.  When the
-libraries are available the model uses a small 1D CNN with GELU activation to
-extract local temporal patterns, feeds the condensed representation through a
-shallow quantum layer (depth=1) and finishes with a compact MLP head.  The goal
-is to improve correlation while preserving CPU-level efficiency.
+remains importable even when the heavy dependencies are absent. When available,
+the model optionally smooths inputs with a light CNN, normalises them, passes
+them through a two-layer entangling quantum circuit and applies a small MLP
+head. Dropout layers around the quantum circuit help stabilise training.
 """
 
 from typing import Any
 
-from utils.drift_detection import DriftDetector
+from utils.drift_detection import DriftDetector, adjust_learning_rate
 
 try:  # pragma: no cover - executed only when deps are available
     import torch
     import torch.nn as nn
+    import numpy as np
 
     from utils.quantum_layers import QuantumLayer, n_qubits
 except Exception as exc:  # pragma: no cover - used for graceful degradation
     torch = None
     nn = None
+    np = None  # type: ignore
     QuantumLayer = None  # type: ignore
     n_qubits = 0  # type: ignore
     _IMPORT_ERROR = exc
@@ -49,36 +50,34 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Normalise to stabilise variance before entering the quantum circuit
             self.norm = nn.LayerNorm(n_qubits)
 
-            # Quantum layer configured with minimal depth (1 entangling layer)
-            self.q_layer = QuantumLayer(n_layers=1)
+            # Quantum layer: depth=2 entangling layers
+            self.q_layer = QuantumLayer(n_layers=2)
+            self.q_dropout = nn.Dropout(0.2)
 
-            # Post-QNode MLP: Linear(4→32) → BatchNorm1d → GELU → Dropout(0.2) → Linear(32→1)
-            # ``dropout`` argument retained for API compatibility.
+            # Post-QNode MLP: Linear(4→16) → GELU → Dropout(0.2) → Linear(16→1)
             self.classical_head = nn.Sequential(
-                nn.Linear(n_qubits, 32),
-                nn.BatchNorm1d(32),
+                nn.Linear(n_qubits, 16),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(32, 1),
+                nn.Linear(16, 1),
             )
 
-            # Previous residual and sigmoid heads removed to reduce bias toward
-            # inverted trends; output is linear for downstream processing.
+            # ``dropout`` argument retained for API compatibility though unused.
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Input comes as (batch, seq, features); rearrange for Conv1d
             x = x.permute(0, 2, 1)
             x = self.pre_q(x)  # conv + GELU -> (batch, n_qubits, seq)
 
-            # Use only the last timestep then normalise before quantum layer
-            x = x[:, :, -1]
+            # Average over timesteps for a smoother representation
+            x = x.mean(dim=2)
             x = self.norm(x)
-            x = self.q_layer(x)
+            x = self.q_dropout(self.q_layer(x))
             out = self.classical_head(x)
             return torch.clamp(out, -3, 3)
 
 
-def train_quantum_prophet(
+    def train_quantum_prophet(
     X_train: Any,
     y_train: Any,
     X_test: Any,
@@ -95,11 +94,14 @@ def train_quantum_prophet(
     explaining which package is missing.
     """
 
-    if torch is None or QuantumLayer is None:
+    if torch is None or QuantumLayer is None or np is None:
         raise ImportError(
-            "train_quantum_prophet requires `torch` and `pennylane` to be installed"
+            "train_quantum_prophet requires `torch`, `pennylane` and `numpy` to be installed"
         ) from _IMPORT_ERROR
 
+    # Deterministic training for reproducibility
+    torch.manual_seed(0)
+    np.random.seed(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     num_features = X_train.shape[2]
@@ -121,8 +123,8 @@ def train_quantum_prophet(
             param.requires_grad = name in [
                 "classical_head.0.weight",
                 "classical_head.0.bias",
-                "classical_head.4.weight",
-                "classical_head.4.bias",
+                "classical_head.3.weight",
+                "classical_head.3.bias",
             ]
         adapt_opt = torch.optim.Adam(
             filter(lambda p: p.requires_grad, model.parameters()), lr=lr
@@ -150,6 +152,8 @@ def train_quantum_prophet(
             drift, prev, curr = drift_detector.update(mae)
             if drift:
                 drift_detector.log("QProphet", epoch + 1, prev, curr)
+                severity = (curr - prev) / prev if prev else None
+                adjust_learning_rate(optimizer, severity, lr)
                 print(f"[QProphet] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model()
 

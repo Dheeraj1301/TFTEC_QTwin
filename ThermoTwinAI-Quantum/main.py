@@ -2,12 +2,13 @@
 from utils.preprocessing import load_and_split_data
 from models.quantum_lstm import train_quantum_lstm
 from models.quantum_prophet import train_quantum_prophet
-from utils.drift_detection import DriftDetector
+from utils.drift_detection import DriftDetector, detect_drift, apply_drift_mask
 from evaluation.evaluate_models import evaluate_model
 import numpy as np
 import csv
 import os
 import argparse
+import pandas as pd
 
 def generate_tftec_cop_data(n_weeks: int = 156):
     """Create a synthetic multivariate dataset with simple degradation effects."""
@@ -45,16 +46,29 @@ def main():
     parser = argparse.ArgumentParser(description="ThermoTwinAI-Quantum pipeline")
     parser.add_argument("--window", type=int, default=15, help="Sliding window size")
     parser.add_argument("--epochs", type=int, default=50, help="Training epochs")
-    parser.add_argument("--lr", type=float, default=0.005, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
+    parser.add_argument(
+        "--use_drift",
+        action="store_true",
+        help="Enable z-score drift masking for training data",
+    )
     args = parser.parse_args()
 
     print("🚀 ThermoTwinAI-Quantum Forecasting Pipeline")
 
     generate_tftec_cop_data()
 
+    df = pd.read_csv("data/synthetic_tftec_cop.csv")
+
     X_train, y_train, X_test, y_test = load_and_split_data(
         "data/synthetic_tftec_cop.csv", window_size=args.window
     )
+
+    if args.use_drift:
+        drift_flags = detect_drift(df["CoP"])
+        X_train, y_train = apply_drift_mask(
+            X_train, y_train, drift_flags, window=args.window
+        )
 
     drift_detector = DriftDetector(window_size=5, threshold=0.2)
 

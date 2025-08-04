@@ -1,29 +1,29 @@
-"""Quantum-enhanced LSTM model with temporal attention.
+"""Quantum-enhanced LSTM model.
 
-The original implementation relied solely on the final LSTM timestep.  Here a
-lightweight multi-head attention layer examines the entire sequence and a
-residual fusion combines the last state with the sequence mean.  The fused
-representation is normalised and passed through a shallow quantum circuit and a
-compact MLP head.  The goal is to improve correlation while remaining
-CPU-friendly.
+The network processes the sequence with a single-directional LSTM and fuses the
+final timestep with the mean over all timesteps. The fused representation is
+layer-normalised and fed to a shallow quantum layer before a compact MLP head.
+Optional convolutional smoothing is available to denoise inputs. The design
+keeps simulation costs low while improving correlation and stability.
 """
 
 import torch
 import torch.nn as nn
+import numpy as np
 
 from utils.quantum_layers import QuantumLayer, n_qubits
-from utils.drift_detection import DriftDetector
+from utils.drift_detection import DriftDetector, adjust_learning_rate
 
 
 class QLSTMModel(nn.Module):
-    """Unidirectional LSTM followed by attention, fusion and a quantum readout."""
+    """Unidirectional LSTM followed by residual fusion and a quantum readout."""
 
     def __init__(
         self,
         input_size: int,
         hidden_size: int = 16,
         q_depth: int = 2,
-        use_conv: bool = True,
+        use_conv: bool = False,
     ) -> None:
         super().__init__()
 
@@ -42,17 +42,14 @@ class QLSTMModel(nn.Module):
             bidirectional=False,
         )
 
-        # Temporal attention to capture long-range dependencies.
-        self.attn = nn.MultiheadAttention(
-            embed_dim=hidden_size, num_heads=2, batch_first=True
-        )
-
         # LayerNorm on the LSTM hidden dimension prior to the quantum layer.
         self.ln = nn.LayerNorm(hidden_size)
 
-        # Quantum circuit with minimal entanglement (depth=1). ``q_depth`` is
-        # retained for API compatibility even though it is fixed.
+        # Quantum circuit with minimal entanglement depth (=1) and dropout
+        # afterwards to stabilise training. ``q_depth`` retained for API
+        # compatibility although the depth is fixed.
         self.q_layer = QuantumLayer(n_layers=1)
+        self.q_dropout = nn.Dropout(0.2)
 
         # Output head: Linear(4→16) → GELU → Linear(16→1)
         self.fc1 = nn.Linear(n_qubits, 16)
@@ -70,15 +67,15 @@ class QLSTMModel(nn.Module):
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)  # (batch, seq, hidden)
 
-        # Attention emphasises informative timesteps
-        attn_out, _ = self.attn(lstm_out, lstm_out, lstm_out)
-
-        # Residual fusion: last timestep + mean over sequence
-        fused = attn_out[:, -1, :] + attn_out.mean(dim=1)
+        # Residual fusion: average the last timestep with the sequence mean
+        final = lstm_out[:, -1, :]
+        mean = torch.mean(lstm_out, dim=1)
+        fused = 0.5 * (final + mean)
 
         # Normalise and keep only the first n_qubits features for the QNode
         normed = self.ln(fused)
         q_out = self.q_layer(normed[:, :n_qubits])
+        q_out = self.q_dropout(q_out)
 
         # Post-quantum MLP head with output clamped to [-3, 3]
         out = self.fc2(self.act(self.fc1(q_out)))
@@ -94,9 +91,12 @@ def train_quantum_lstm(
     hidden_size: int = 16,
     q_depth: int = 2,
     drift_detector: DriftDetector | None = None,
-):
+):  
     """Train ``QLSTMModel`` and return predictions for ``X_test``."""
 
+    # Reproducibility for stable evaluations
+    torch.manual_seed(0)
+    np.random.seed(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_features = X_train.shape[2]
     model = QLSTMModel(num_features, hidden_size=hidden_size, q_depth=q_depth).to(device)
@@ -143,6 +143,8 @@ def train_quantum_lstm(
             drift, prev, curr = drift_detector.update(mae)
             if drift:
                 drift_detector.log("QLSTM", epoch + 1, prev, curr)
+                severity = (curr - prev) / prev if prev else None
+                adjust_learning_rate(optimizer, severity, lr)
                 print(f"[QLSTM] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model()
 
