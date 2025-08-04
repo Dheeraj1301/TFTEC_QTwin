@@ -16,7 +16,7 @@ def evaluate_model(
     lower=None,
     upper=None,
 ):
-    """Print common regression metrics and optionally plot predictions.
+    """Print regression metrics, optionally plot and return them.
 
     When ``lower`` and ``upper`` bounds are provided, coverage and sharpness of
     the predictive interval are also reported.
@@ -29,6 +29,10 @@ def evaluate_model(
     # Metrics computed with numpy to avoid external dependencies
     mae = np.mean(np.abs(y_true - y_pred))
     rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
+    mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8)))
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - y_true.mean()) ** 2) + 1e-8
+    r2 = 1 - ss_res / ss_tot
     if y_true.std() == 0 or y_pred.std() == 0:
         corr = 0.0
     else:
@@ -37,6 +41,8 @@ def evaluate_model(
     print(f"📌 {name} Evaluation")
     print(f"   MAE     = {mae:.6f}")
     print(f"   RMSE    = {rmse:.6f}")
+    print(f"   MAPE    = {mape:.6f}")
+    print(f"   R²      = {r2:.4f}")
     print(f"   Corr(R) = {corr:.4f}")
 
     if lower is not None and upper is not None:
@@ -63,3 +69,11 @@ def evaluate_model(
         plt.savefig(fname)
         plt.close()
         print(f"   Plot saved to {fname}")
+
+    return {
+        "MAE": float(mae),
+        "RMSE": float(rmse),
+        "MAPE": float(mape),
+        "R2": float(r2),
+        "Corr": float(corr),
+    }
