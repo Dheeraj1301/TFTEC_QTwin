@@ -49,7 +49,8 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             )
 
             # Normalise to stabilise variance before entering the quantum circuit
-            self.norm = nn.LayerNorm(n_qubits)
+            # Explicitly use four features as required by the QNode
+            self.norm = nn.LayerNorm(4)
 
             # Quantum layer: depth=2 entangling layers
             self.q_layer = QuantumLayer(n_layers=2)
