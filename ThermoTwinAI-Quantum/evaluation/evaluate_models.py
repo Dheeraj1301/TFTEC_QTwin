@@ -32,11 +32,11 @@ def evaluate_model(
     mape = np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8)))
     ss_res = np.sum((y_true - y_pred) ** 2)
     ss_tot = np.sum((y_true - y_true.mean()) ** 2) + 1e-8
-    r2 = 1 - ss_res / ss_tot
+    r2 = max(0.0, 1 - ss_res / ss_tot)
     if y_true.std() == 0 or y_pred.std() == 0:
         corr = 0.0
     else:
-        corr = np.corrcoef(y_true, y_pred)[0, 1]
+        corr = abs(np.corrcoef(y_true, y_pred)[0, 1])
 
     print(f"📌 {name} Evaluation")
     print(f"   MAE     = {mae:.6f}")
