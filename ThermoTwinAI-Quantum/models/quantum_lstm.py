@@ -1,11 +1,10 @@
-"""Quantum-enhanced LSTM model with temporal attention.
+"""Quantum-enhanced LSTM model.
 
-The original implementation relied solely on the final LSTM timestep.  Here a
-lightweight multi-head attention layer examines the entire sequence and a
-residual fusion combines the last state with the sequence mean.  The fused
-representation is normalised and passed through a shallow quantum circuit and a
-compact MLP head.  The goal is to improve correlation while remaining
-CPU-friendly.
+The network processes the sequence with a single-directional LSTM and fuses the
+final timestep with the mean over all timesteps. The fused representation is
+layer-normalised and fed to a shallow quantum layer before a compact MLP head.
+Optional convolutional smoothing is available to denoise inputs. The design
+keeps simulation costs low while improving correlation and stability.
 """
 
 import torch
@@ -16,7 +15,7 @@ from utils.drift_detection import DriftDetector
 
 
 class QLSTMModel(nn.Module):
-    """Unidirectional LSTM followed by attention, fusion and a quantum readout."""
+    """Unidirectional LSTM followed by residual fusion and a quantum readout."""
 
     def __init__(
         self,
@@ -42,17 +41,14 @@ class QLSTMModel(nn.Module):
             bidirectional=False,
         )
 
-        # Temporal attention to capture long-range dependencies.
-        self.attn = nn.MultiheadAttention(
-            embed_dim=hidden_size, num_heads=2, batch_first=True
-        )
-
         # LayerNorm on the LSTM hidden dimension prior to the quantum layer.
         self.ln = nn.LayerNorm(hidden_size)
 
-        # Quantum circuit with minimal entanglement (depth=1). ``q_depth`` is
-        # retained for API compatibility even though it is fixed.
+        # Quantum circuit with minimal entanglement depth (=1) and dropout
+        # afterwards to stabilise training. ``q_depth`` retained for API
+        # compatibility although the depth is fixed.
         self.q_layer = QuantumLayer(n_layers=1)
+        self.q_dropout = nn.Dropout(0.3)
 
         # Output head: Linear(4→16) → GELU → Linear(16→1)
         self.fc1 = nn.Linear(n_qubits, 16)
@@ -70,15 +66,15 @@ class QLSTMModel(nn.Module):
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)  # (batch, seq, hidden)
 
-        # Attention emphasises informative timesteps
-        attn_out, _ = self.attn(lstm_out, lstm_out, lstm_out)
-
         # Residual fusion: last timestep + mean over sequence
-        fused = attn_out[:, -1, :] + attn_out.mean(dim=1)
+        final = lstm_out[:, -1, :]
+        mean = torch.mean(lstm_out, dim=1)
+        fused = final + mean
 
         # Normalise and keep only the first n_qubits features for the QNode
         normed = self.ln(fused)
         q_out = self.q_layer(normed[:, :n_qubits])
+        q_out = self.q_dropout(q_out)
 
         # Post-quantum MLP head with output clamped to [-3, 3]
         out = self.fc2(self.act(self.fc1(q_out)))
