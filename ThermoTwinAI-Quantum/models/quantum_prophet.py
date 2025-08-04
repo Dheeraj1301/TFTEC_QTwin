@@ -110,8 +110,11 @@ def train_quantum_prophet(
     num_features = X_train.shape[2]
     model = QProphetModel(num_features, hidden_dim=hidden_dim, q_depth=q_depth).to(device)
     criterion = nn.MSELoss()
-    # AdamW with AMSGrad and a plateau scheduler provide "safe" optimisation
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, amsgrad=True)
+    # AdamW with weight decay, AMSGrad and a plateau scheduler provide
+    # "safe" optimisation
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=lr, weight_decay=1e-4, amsgrad=True
+    )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.5, patience=5, min_lr=1e-5
     )
@@ -119,6 +122,11 @@ def train_quantum_prophet(
     X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
     X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
+
+    # Early stopping to curb overfitting based on MAE
+    best_mae = float("inf")
+    epochs_no_improve = 0
+    patience = 10
 
     def adapt_model(severity: float | None = None) -> None:
         if drift_detector is None:
@@ -134,7 +142,10 @@ def train_quantum_prophet(
                 "classical_head.3.bias",
             ]
         adapt_opt = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, model.parameters()), lr=lr, amsgrad=True
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=lr,
+            weight_decay=1e-4,
+            amsgrad=True,
         )
         adjust_learning_rate(adapt_opt, severity, lr)
         model.train()
@@ -165,6 +176,15 @@ def train_quantum_prophet(
                 drift_detector.log("QProphet", epoch + 1, prev, curr)
                 print(f"[QProphet] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model(severity)
+
+        if mae < best_mae - 1e-6:
+            best_mae = mae
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"[QProphet] Early stopping at epoch {epoch + 1}")
+                break
 
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 
