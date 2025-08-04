@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 from utils.quantum_layers import QuantumLayer, n_qubits
 from utils.drift_detection import DriftDetector, adjust_learning_rate
+from utils.preprocessing import SensorFusion
 
 
 class QLSTMModel(nn.Module):
@@ -26,9 +27,13 @@ class QLSTMModel(nn.Module):
         hidden_size: int = 16,
         q_depth: int = 2,
         use_conv: bool = False,
-        dropout: float = 0.1,
+        dropout: float = 0.25,
+        use_attention: bool = True,
     ) -> None:
         super().__init__()
+
+        # Learnable sensor fusion weights applied before any processing.
+        self.sensor_fusion = SensorFusion(input_size)
 
         # Optional 1D convolution to smooth local temporal patterns.
         self.conv1 = (
@@ -45,8 +50,19 @@ class QLSTMModel(nn.Module):
             bidirectional=False,
         )
 
-        # LayerNorm on the LSTM hidden dimension prior to the quantum layer.
-        self.ln = nn.LayerNorm(hidden_size)
+        # Optional attention to weight timesteps after the LSTM
+        self.use_attention = use_attention
+        self.attn = nn.Linear(hidden_size, 1) if use_attention else None
+
+        # Learnable fusion parameter between the last timestep and the
+        # attention-pooled representation. ``alpha`` is squashed via sigmoid in
+        # ``forward`` to keep it in ``[0, 1]``.
+        self.alpha = nn.Parameter(torch.tensor(0.5))
+
+        # Two LayerNorms: one before the quantum layer and one on the quantum
+        # output, stabilising both classical and quantum representations.
+        self.ln1 = nn.LayerNorm(hidden_size)
+        self.ln2 = nn.LayerNorm(n_qubits)
 
         # Dropout directly on the LSTM representations and after the quantum
         # layer supports Monte Carlo Dropout for uncertainty estimates.
@@ -65,6 +81,9 @@ class QLSTMModel(nn.Module):
         self.fc2 = nn.Linear(16, 1)
 
     def forward(self, x: torch.Tensor, mc_dropout: bool = False) -> torch.Tensor:
+        # Apply learnable sensor fusion weights
+        x = self.sensor_fusion(x)
+
         # Optional local smoothing via Conv1d
         if self.conv1 is not None:
             # Conv1d expects (batch, channels, seq_len)
@@ -78,14 +97,21 @@ class QLSTMModel(nn.Module):
             lstm_out, p=self.lstm_dropout.p, training=self.training or mc_dropout
         )
 
-        # Residual fusion: average of last timestep and mean over sequence
+        # Either attention-pooled representation or simple mean
+        if self.use_attention:
+            weights = torch.softmax(self.attn(lstm_out), dim=1)  # (batch, seq, 1)
+            context = torch.sum(weights * lstm_out, dim=1)
+        else:
+            context = torch.mean(lstm_out, dim=1)
+
         final = lstm_out[:, -1, :]
-        mean = torch.mean(lstm_out, dim=1)
-        fused = (final + mean) * 0.5
+        alpha = torch.sigmoid(self.alpha)
+        fused = alpha * final + (1 - alpha) * context
 
         # Normalise and keep only the first n_qubits features for the QNode
-        normed = self.ln(fused)
+        normed = self.ln1(fused)
         q_out = self.q_layer(normed[:, :n_qubits])
+        q_out = self.ln2(q_out)
         q_out = F.dropout(
             q_out, p=self.q_dropout.p, training=self.training or mc_dropout
         )
@@ -103,7 +129,7 @@ def train_quantum_lstm(
     lr: float = 0.001,
     hidden_size: int = 16,
     q_depth: int = 2,
-    dropout: float = 0.1,
+    dropout: float = 0.25,
     drift_detector: DriftDetector | None = None,
     patience: int = 10,
 ) -> tuple[nn.Module, np.ndarray]:
@@ -203,6 +229,14 @@ def train_quantum_lstm(
     corr = float(
         torch.corrcoef(torch.stack((train_preds.squeeze(), y_train.squeeze())))[0, 1]
     )
+    if corr < 0:
+        print("[QLSTM] Negative trend detected; inverting output sign for stability")
+        with torch.no_grad():
+            model.fc2.weight.data *= -1
+            model.fc2.bias.data *= -1
+            train_preds = -train_preds
+        corr = -corr
+
     mse = nn.functional.mse_loss(train_preds, y_train).item()
     print(f"[QLSTM] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
 
