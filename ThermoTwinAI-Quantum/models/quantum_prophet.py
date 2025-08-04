@@ -154,6 +154,7 @@ def train_quantum_prophet(
         out = model(x_recent)
         adapt_loss = criterion(out, y_recent)
         adapt_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         adapt_opt.step()
         for param in model.parameters():
             param.requires_grad = True

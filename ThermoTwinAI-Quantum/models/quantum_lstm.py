@@ -106,7 +106,14 @@ def train_quantum_lstm(
     model = QLSTMModel(num_features, hidden_size=hidden_size, q_depth=q_depth).to(device)
 
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # AdamW with weight decay and AMSGrad along with a plateau scheduler
+    # provides "safe" optimisation comparable to the QProphet setup.
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=lr, weight_decay=1e-4, amsgrad=True
+    )
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, factor=0.5, patience=5, min_lr=1e-5
+    )
 
     X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
@@ -121,8 +128,11 @@ def train_quantum_lstm(
         y_recent = y_train[-window:]
         for name, param in model.named_parameters():
             param.requires_grad = name.startswith("fc")
-        adapt_opt = torch.optim.Adam(
-            filter(lambda p: p.requires_grad, model.parameters()), lr=lr
+        adapt_opt = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=lr,
+            weight_decay=1e-4,
+            amsgrad=True,
         )
         adjust_learning_rate(adapt_opt, severity, lr)
         model.train()
@@ -130,6 +140,7 @@ def train_quantum_lstm(
         out = model(x_recent)
         adapt_loss = criterion(out, y_recent)
         adapt_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         adapt_opt.step()
         for param in model.parameters():
             param.requires_grad = True
@@ -144,6 +155,7 @@ def train_quantum_lstm(
         optimizer.step()
 
         mae = torch.nn.functional.l1_loss(output, y_train).item()
+        scheduler.step(mae)
         if drift_detector is not None:
             drift, prev, curr = drift_detector.update(mae)
             if drift:
