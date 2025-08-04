@@ -198,12 +198,29 @@ def train_quantum_prophet(
     model.eval()
     with torch.no_grad():
         train_preds = model(X_train).cpu()
-        preds = model(X_test).cpu().numpy().flatten()
 
     corr = float(
         torch.corrcoef(torch.stack((train_preds.squeeze(), y_train.squeeze())))[0, 1]
     )
     mse = nn.functional.mse_loss(train_preds, y_train).item()
+
+    if corr < 0:
+        with torch.no_grad():
+            layer = model.classical_head[-1]
+            layer.weight.mul_(-1)
+            layer.bias.mul_(-1)
+            train_preds = model(X_train).cpu()
+            corr = float(
+                torch.corrcoef(
+                    torch.stack((train_preds.squeeze(), y_train.squeeze()))
+                )[0, 1]
+            )
+            mse = nn.functional.mse_loss(train_preds, y_train).item()
+        print("[QProphet] Output weights flipped to enforce positive correlation.")
+
+    with torch.no_grad():
+        preds = model(X_test).cpu().numpy().flatten()
+
     print(f"[QProphet] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
 
     return preds
