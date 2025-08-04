@@ -9,9 +9,11 @@ head. Dropout layers around the quantum circuit help stabilise training.
 
 from typing import Any
 
-from utils.drift_detection import DriftDetector
+from utils.drift_detection import DriftDetector, adjust_learning_rate
 
 try:  # pragma: no cover - executed only when deps are available
+    import random
+    import numpy as np
     import torch
     import torch.nn as nn
 
@@ -50,7 +52,7 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
 
             # Quantum layer: depth=2 entangling layers
             self.q_layer = QuantumLayer(n_layers=2)
-            self.q_dropout = nn.Dropout(0.3)
+            self.q_dropout = nn.Dropout(0.1)
 
             # Post-QNode MLP: Linear(4→16) → GELU → Dropout(0.2) → Linear(16→1)
             self.classical_head = nn.Sequential(
@@ -67,8 +69,8 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             x = x.permute(0, 2, 1)
             x = self.pre_q(x)  # conv + GELU -> (batch, n_qubits, seq)
 
-            # Use only the last timestep then normalise before quantum layer
-            x = x[:, :, -1]
+            # Mean pooling over timesteps then normalise before quantum layer
+            x = x.mean(dim=2)
             x = self.norm(x)
             x = self.q_dropout(self.q_layer(x))
             out = self.classical_head(x)
@@ -97,6 +99,12 @@ def train_quantum_prophet(
             "train_quantum_prophet requires `torch` and `pennylane` to be installed"
         ) from _IMPORT_ERROR
 
+    torch.manual_seed(42)
+    np.random.seed(42)
+    random.seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(42)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     num_features = X_train.shape[2]
@@ -108,7 +116,7 @@ def train_quantum_prophet(
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
     X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
 
-    def adapt_model() -> None:
+    def adapt_model(severity: float | None = None) -> None:
         if drift_detector is None:
             return
         window = drift_detector.window_size
@@ -124,6 +132,7 @@ def train_quantum_prophet(
         adapt_opt = torch.optim.Adam(
             filter(lambda p: p.requires_grad, model.parameters()), lr=lr
         )
+        adjust_learning_rate(adapt_opt, severity, lr)
         model.train()
         adapt_opt.zero_grad()
         out = model(x_recent)
@@ -146,9 +155,11 @@ def train_quantum_prophet(
         if drift_detector is not None:
             drift, prev, curr = drift_detector.update(mae)
             if drift:
+                severity = (curr - prev) / prev if prev else None
+                adjust_learning_rate(optimizer, severity, lr)
                 drift_detector.log("QProphet", epoch + 1, prev, curr)
                 print(f"[QProphet] Drift detected at epoch {epoch + 1}. Adapting...")
-                adapt_model()
+                adapt_model(severity)
 
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 

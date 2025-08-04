@@ -46,13 +46,21 @@ def main():
     parser = argparse.ArgumentParser(description="ThermoTwinAI-Quantum pipeline")
     parser.add_argument("--window", type=int, default=15, help="Sliding window size")
     parser.add_argument("--epochs", type=int, default=50, help="Training epochs")
-    parser.add_argument("--lr", type=float, default=0.005, help="Learning rate")
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="Learning rate (default 0.005, or 0.001 when --use_drift is set)",
+    )
     parser.add_argument(
         "--use_drift",
         action="store_true",
         help="Enable z-score drift masking for training data",
     )
     args = parser.parse_args()
+
+    if args.lr is None:
+        args.lr = 0.001 if args.use_drift else 0.005
 
     print("🚀 ThermoTwinAI-Quantum Forecasting Pipeline")
 
