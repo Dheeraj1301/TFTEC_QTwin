@@ -41,6 +41,9 @@ def load_and_split_data(
 
     if use_augmentation:
         train_data = augment_time_series(train_data, seed=seed)
+        # Augmentation may slightly drift features outside the original
+        # min-max range; clip them back to preserve a stable distribution
+        train_data = np.clip(train_data, 0.0, 1.0)
 
     def create_windows(series: np.ndarray):
         X, y = [], []

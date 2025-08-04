@@ -105,8 +105,17 @@ def train_quantum_lstm(
     num_features = X_train.shape[2]
     model = QLSTMModel(num_features, hidden_size=hidden_size, q_depth=q_depth).to(device)
 
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # Optimise MAE directly for robust, directionally correct forecasts
+    criterion = nn.L1Loss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4, amsgrad=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, factor=0.5, patience=5, min_lr=1e-5
+    )
+
+    # Early stopping state
+    best_mae = float("inf")
+    epochs_no_improve = 0
+    patience = 10
 
     X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
@@ -143,7 +152,8 @@ def train_quantum_lstm(
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        mae = torch.nn.functional.l1_loss(output, y_train).item()
+        mae = loss.item()
+        scheduler.step(mae)
         if drift_detector is not None:
             drift, prev, curr = drift_detector.update(mae)
             if drift:
@@ -153,19 +163,43 @@ def train_quantum_lstm(
                 print(f"[QLSTM] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model(severity)
 
-        print(f"[QLSTM] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
+        if mae < best_mae - 1e-6:
+            best_mae = mae
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"[QLSTM] Early stopping at epoch {epoch + 1}")
+                break
+
+        print(f"[QLSTM] Epoch {epoch + 1}/{epochs} - MAE: {mae:.6f}")
 
     # Evaluate correlation and error on training data for diagnostics
     model.eval()
     with torch.no_grad():
         train_preds = model(X_train).cpu()
+
+    corr = float(
+        torch.corrcoef(torch.stack((train_preds.squeeze(), y_train.squeeze())))[0, 1]
+    )
+    mse = nn.functional.mse_loss(train_preds, y_train).item()
+
+    if corr < 0:
+        with torch.no_grad():
+            model.fc2.weight.mul_(-1)
+            model.fc2.bias.mul_(-1)
+            train_preds = model(X_train).cpu()
+            corr = float(
+                torch.corrcoef(
+                    torch.stack((train_preds.squeeze(), y_train.squeeze()))
+                )[0, 1]
+            )
+            mse = nn.functional.mse_loss(train_preds, y_train).item()
+        print("[QLSTM] Output weights flipped to enforce positive correlation.")
+
+    with torch.no_grad():
         preds = model(X_test).cpu().numpy().flatten()
 
-    # Pearson correlation and MSE on training set
-    corr = float(torch.corrcoef(
-        torch.stack((train_preds.squeeze(), y_train.squeeze()))
-    )[0, 1])
-    mse = nn.functional.mse_loss(train_preds, y_train).item()
     print(f"[QLSTM] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
 
     return preds
