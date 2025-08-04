@@ -13,6 +13,7 @@ from evaluation.evaluate_models import evaluate_model
 from models.quantum_lstm import train_quantum_lstm
 from models.quantum_prophet import train_quantum_prophet
 from utils.preprocessing import load_and_split_data
+from pathlib import Path
 
 
 class VanillaLSTM(nn.Module):
@@ -67,8 +68,30 @@ def train_prophet_baseline(y_train, periods: int):  # pragma: no cover - heavy d
     return forecast
 
 
-def run_benchmarks(data_path: str = "data/synthetic_tftec_cop.csv", results_path: str = "results/benchmark_results.csv") -> None:
-    X_train, y_train, X_test, y_test = load_and_split_data(data_path)
+def run_benchmarks(
+    data_path: str | Path | None = None,
+    results_path: str | Path | None = None,
+) -> None:
+    """Run baseline and quantum benchmarks and write results to CSV.
+
+    Parameters
+    ----------
+    data_path:
+        Optional path to the CSV data file.  When ``None`` the synthetic
+        dataset bundled with the repository is used regardless of the current
+        working directory.
+    results_path:
+        Optional output CSV path.  When ``None`` results are written next to
+        the bundled data file.
+    """
+
+    root = Path(__file__).resolve().parent.parent
+    if data_path is None:
+        data_path = root / "data" / "synthetic_tftec_cop.csv"
+    if results_path is None:
+        results_path = root / "results" / "benchmark_results.csv"
+
+    X_train, y_train, X_test, y_test = load_and_split_data(str(data_path))
 
     rows = []
 
