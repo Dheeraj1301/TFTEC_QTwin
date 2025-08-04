@@ -52,19 +52,23 @@ The Quantum NeuralProphet module began as a minimalist feed‑forward network ap
 reshapes each multivariate window into a flat vector and compresses it through `feature_proj = nn.Linear(input_size, 4)`,
 as seen in [`models/quantum_prophet.py`](models/quantum_prophet.py). Those four features enter a `QuantumLayer` with
 `q_layers=8` before being processed by a classical network of width `hidden_dim=16`. The accompanying `train_quantum_prophet`
-routine trains for 50 epochs using an AdamW optimiser (`amsgrad=True`) with a
-ReduceLROnPlateau scheduler at `lr=0.005` for safer convergence. During tuning,
-hidden dimensions {8,16,32} and quantum depths {4,8}
-were evaluated; the selected combination provided the lowest validation error without overfitting. Flattening the window
-and projecting it into a compact quantum feature space proved particularly effective at integrating disparate sensor
-readings while controlling parameter count.
+routine trains for up to 50 epochs using an AdamW optimiser (`amsgrad=True`) with
+weight decay and a ReduceLROnPlateau scheduler at `lr=0.005` for safer
+convergence. An MAE‑based early stopping mechanism with a patience of ten
+epochs halts training if no improvement is observed. During tuning, hidden
+dimensions {8,16,32} and quantum depths {4,8} were evaluated; the selected
+combination provided the lowest validation error without overfitting. Flattening
+the window and projecting it into a compact quantum feature space proved
+particularly effective at integrating disparate sensor readings while
+controlling parameter count.
 
 To further normalize the diverse sensor streams, each channel is scaled to zero mean and unit variance before windowing.
 The training routine reshapes the multivariate sequence so that linear layers can treat each time step equally, a design
-that simplified experimentation with different window sizes. Early stopping based on validation loss was investigated but
-showed little benefit once the learning rate was reduced to 0.005, so the final workflow favors a fixed epoch schedule for
-reproducibility. Extensive logging indicated that increasing `hidden_dim` beyond 16 yielded diminishing returns while
-rapidly inflating parameter count, reinforcing the choice of a compact yet expressive hidden layer.
+that simplified experimentation with different window sizes. The MAE‑based early
+stopping provides a safety net against overfitting while retaining reproducible
+results. Extensive logging indicated that increasing `hidden_dim` beyond 16
+yields diminishing returns while rapidly inflating parameter count, reinforcing
+the choice of a compact yet expressive hidden layer.
 
 The quantitative impact of these design choices is pronounced. MAE fell from 0.1771 to 0.1418 and RMSE from 0.2183 to
 0.1760, reflecting tighter point estimates across the prediction horizon. More strikingly, the correlation coefficient
