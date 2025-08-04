@@ -52,19 +52,17 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Explicitly use four features as required by the QNode
             self.norm = nn.LayerNorm(4)
 
-            # Quantum layer: depth=2 entangling layers
-            self.q_layer = QuantumLayer(n_layers=2)
-            self.q_dropout = nn.Dropout(0.1)
+            # Quantum layer with configurable depth
+            self.q_layer = QuantumLayer(n_layers=q_depth)
+            self.q_dropout = nn.Dropout(dropout)
 
-            # Post-QNode MLP: Linear(4→16) → GELU → Dropout(0.2) → Linear(16→1)
+            # Post-QNode MLP: Linear(4→hidden_dim) → GELU → Dropout → Linear(hidden_dim→1)
             self.classical_head = nn.Sequential(
-                nn.Linear(n_qubits, 16),
+                nn.Linear(n_qubits, hidden_dim),
                 nn.GELU(),
-                nn.Dropout(0.2),
-                nn.Linear(16, 1),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1),
             )
-
-            # ``dropout`` argument retained for API compatibility though unused.
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             # Input comes as (batch, seq, features); rearrange for Conv1d
@@ -74,7 +72,8 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Mean pooling over timesteps then normalise before quantum layer
             x = x.mean(dim=2)
             x = self.norm(x)
-            x = self.q_dropout(self.q_layer(x))
+            residual = x
+            x = self.q_dropout(self.q_layer(x)) + residual
             out = self.classical_head(x)
             return torch.clamp(out, -3, 3)
 
