@@ -19,6 +19,7 @@ try:  # pragma: no cover - executed only when deps are available
     import torch.nn.functional as F
 
     from utils.quantum_layers import QuantumLayer, n_qubits
+    from utils.preprocessing import SensorFusion
 except Exception as exc:  # pragma: no cover - used for graceful degradation
     torch = None
     nn = None
@@ -37,11 +38,14 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
         def __init__(
             self,
             num_features: int,
-            hidden_dim: int = 32,
+            hidden_dim: int = 32,  # retained for backwards compatibility
             q_depth: int = 2,
-            dropout: float = 0.1,
+            dropout: float = 0.25,
         ) -> None:
             super().__init__()
+
+            # Learnable fusion weights across sensors applied prior to the CNN
+            self.sensor_fusion = SensorFusion(num_features)
 
             # 1D CNN → GELU smooths local patterns before the quantum circuit
             self.pre_q = nn.Sequential(
@@ -58,14 +62,15 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             self.q_layer = QuantumLayer(n_layers=q_depth)
             self.q_dropout = nn.Dropout(dropout)
 
-            # Post-QNode MLP broken into explicit layers to control dropout
-            self.fc1 = nn.Linear(n_qubits, hidden_dim)
+            # Post-QNode MLP expanded to 4→32→1
+            self.fc1 = nn.Linear(n_qubits, 32)
             self.act = nn.GELU()
             self.fc1_dropout = nn.Dropout(dropout)
-            self.fc2 = nn.Linear(hidden_dim, 1)
+            self.fc2 = nn.Linear(32, 1)
 
         def forward(self, x: torch.Tensor, mc_dropout: bool = False) -> torch.Tensor:
-            # Input comes as (batch, seq, features); rearrange for Conv1d
+            # Apply sensor fusion then rearrange for Conv1d
+            x = self.sensor_fusion(x)
             x = x.permute(0, 2, 1)
             x = self.pre_q(x)  # conv + GELU -> (batch, n_qubits, seq)
             x = F.dropout(
@@ -75,12 +80,10 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Mean pooling over timesteps then normalise before quantum layer
             x = x.mean(dim=2)
             x = self.norm(x)
-            residual = x
             x = self.q_layer(x)
             x = F.dropout(
                 x, p=self.q_dropout.p, training=self.training or mc_dropout
             )
-            x = x + residual
             x = self.act(self.fc1(x))
             x = F.dropout(
                 x, p=self.fc1_dropout.p, training=self.training or mc_dropout
@@ -97,7 +100,7 @@ def train_quantum_prophet(
     lr: float = 0.001,
     hidden_dim: int = 32,
     q_depth: int = 2,
-    dropout: float = 0.1,
+    dropout: float = 0.25,
     drift_detector: DriftDetector | None = None,
     patience: int = 10,
 ) -> tuple[Any, Any]:
