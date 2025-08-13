@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from utils.quantum_layers import QuantumLayer, n_qubits
 from utils.drift_detection import DriftDetector, adjust_learning_rate
 from utils.preprocessing import SensorFusion
+from utils.causal_graph_attention import AdaptiveCausalGraphAttention
 
 
 class QLSTMModel(nn.Module):
@@ -75,6 +76,9 @@ class QLSTMModel(nn.Module):
         self.q_layer = QuantumLayer(n_layers=depth)
         self.q_dropout = nn.Dropout(dropout)
 
+        # Adaptive causal graph attention to model inter-sensor influence
+        self.acga = AdaptiveCausalGraphAttention(input_size, n_qubits)
+
         # Output head: Linear(4→16) → GELU → Linear(16→1)
         self.fc1 = nn.Linear(n_qubits, 16)
         self.act = nn.GELU()
@@ -90,6 +94,9 @@ class QLSTMModel(nn.Module):
             x = x.transpose(1, 2)
             x = self.conv1(x)
             x = x.transpose(1, 2)
+
+        # Preserve sensor sequence for causal modelling
+        sensor_seq = x
 
         # LSTM produces representations for each timestep
         lstm_out, _ = self.lstm(x)  # (batch, seq, hidden)
@@ -108,9 +115,14 @@ class QLSTMModel(nn.Module):
         alpha = torch.sigmoid(self.alpha)
         fused = alpha * final + (1 - alpha) * context
 
-        # Normalise and keep only the first n_qubits features for the QNode
-        normed = self.ln1(fused)
-        q_out = self.q_layer(normed[:, :n_qubits])
+        # Compute causal embedding between sensors
+        causal_emb = self.acga(sensor_seq)
+        lam = self.acga.lambda_value()
+
+        # Combine base LSTM features with causal embedding for quantum input
+        base = self.ln1(fused)[:, :n_qubits]
+        q_input = F.layer_norm(base + lam * causal_emb, (n_qubits,))
+        q_out = self.q_layer(q_input)
         q_out = self.ln2(q_out)
         q_out = F.dropout(
             q_out, p=self.q_dropout.p, training=self.training or mc_dropout
@@ -216,6 +228,7 @@ def train_quantum_lstm(
                 drift_detector.log("QLSTM", epoch + 1, prev, curr)
                 print(f"[QLSTM] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model(severity)
+                model.acga.adjust_lambda(severity)
 
         print(f"[QLSTM] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 
