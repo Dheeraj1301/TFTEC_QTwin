@@ -1,12 +1,13 @@
 """Feature importance analysis using SHAP."""
 
-from __future__ import annotations
-
 import numpy as np
 import torch
+from typing import Optional
 
 
-def compute_feature_importance(model: torch.nn.Module, X: np.ndarray, top_k: int | None = None):
+def compute_feature_importance(
+    model: torch.nn.Module, X: np.ndarray, top_k: Optional[int] = None
+):
     """Compute feature importance for the classical portion of ``model``.
 
     Parameters

@@ -1,10 +1,9 @@
 """Hyperparameter tuning utilities for quantum models."""
 
-from __future__ import annotations
-
 import itertools
 import random
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
@@ -24,7 +23,7 @@ def grid_search(model: str, param_grid: dict, data_path: str) -> TrialResult:
     """Exhaustively evaluate all combinations in ``param_grid``."""
 
     X_train, y_train, X_test, y_test = load_and_split_data(data_path)
-    best: TrialResult | None = None
+    best: Optional[TrialResult] = None
 
     keys = list(param_grid.keys())
     for values in itertools.product(*param_grid.values()):
@@ -63,7 +62,7 @@ def random_search(model: str, param_grid: dict, data_path: str, n_iter: int = 10
     """Sample ``n_iter`` random combinations from ``param_grid``."""
 
     X_train, y_train, X_test, y_test = load_and_split_data(data_path)
-    best: TrialResult | None = None
+    best: Optional[TrialResult] = None
 
     keys = list(param_grid.keys())
     for _ in range(n_iter):

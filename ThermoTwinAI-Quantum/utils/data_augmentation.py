@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 
 
@@ -7,7 +9,7 @@ def augment_time_series(
     add_scale: bool = True,
     add_seasonal: bool = True,
     add_warp: bool = True,
-    seed: int | None = None,
+    seed: Optional[int] = None,
 ) -> np.ndarray:
     """Augment a multivariate time series using several techniques.
 
