@@ -226,8 +226,14 @@ def train_quantum_prophet(
 
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - MAE: {mae:.6f}")
 
-    # Evaluate correlation and error on training data for diagnostics
-    final_model = swa_model if swa_active else model
+    # Evaluate correlation and error on training data for diagnostics. If
+    # Stochastic Weight Averaging was used we copy the averaged weights back into
+    # the original ``QProphetModel`` instance so that downstream code can rely on
+    # model specific attributes such as ``acga``. Returning the raw
+    # ``AveragedModel`` breaks this assumption and leads to attribute errors.
+    final_model = model
+    if swa_active:
+        final_model.load_state_dict(swa_model.state_dict())
     final_model.eval()
     with torch.no_grad():
         train_preds = final_model(X_train).cpu()
