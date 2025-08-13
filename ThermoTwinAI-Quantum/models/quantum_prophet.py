@@ -233,7 +233,13 @@ def train_quantum_prophet(
     # ``AveragedModel`` breaks this assumption and leads to attribute errors.
     final_model = model
     if swa_active:
-        final_model.load_state_dict(swa_model.state_dict())
+        # ``AveragedModel.state_dict`` includes bookkeeping buffers such as
+        # ``n_averaged`` and prefixes parameters with ``module.``. The plain
+        # ``QProphetModel`` instance expects a clean ``state_dict`` matching its
+        # own parameter names. Loading the raw dict therefore results in missing
+        # keys and an exception. Pull the parameters from the wrapped module
+        # instead to obtain the correctly named weights.
+        final_model.load_state_dict(swa_model.module.state_dict())
     final_model.eval()
     with torch.no_grad():
         train_preds = final_model(X_train).cpu()
