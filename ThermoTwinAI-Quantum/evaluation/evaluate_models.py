@@ -89,3 +89,21 @@ def evaluate_model(
         "R2": float(r2),
         "Corr": float(corr),
     }
+
+
+def evaluate_acga(acga, save: bool = True, name: str = "acga_attention"):
+    """Print and optionally save the latest attention matrix from ``acga``."""
+
+    attn = getattr(acga, "attention_matrix", lambda: None)()
+    if attn is None:
+        print("⚠️  ACGA has not produced attention weights yet")
+        return None
+    mat = attn.detach().cpu().numpy()
+    print("📌 ACGA Attention Matrix")
+    print(mat)
+    if save:
+        os.makedirs("plots", exist_ok=True)
+        fname = f"plots/{name}.csv"
+        np.savetxt(fname, mat, delimiter=",")
+        print(f"   Matrix saved to {fname}")
+    return mat

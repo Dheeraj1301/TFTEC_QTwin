@@ -17,6 +17,7 @@ try:  # pragma: no cover - executed only when deps are available
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
+    from torch.optim.swa_utils import AveragedModel, SWALR
 
     from utils.quantum_layers import QuantumLayer, n_qubits
     from utils.preprocessing import SensorFusion
@@ -146,6 +147,12 @@ def train_quantum_prophet(
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, factor=0.5, patience=5, min_lr=1e-5
     )
+    # Stochastic Weight Averaging for safer optimisation and smoother
+    # generalisation. Start averaging halfway through training.
+    swa_start = max(5, epochs // 2)
+    swa_model = AveragedModel(model)
+    swa_scheduler = SWALR(optimizer, swa_lr=lr)
+    swa_active = False
 
     X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
@@ -192,9 +199,13 @@ def train_quantum_prophet(
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        # Step the scheduler on the MAE to align with the evaluation metric
         mae = loss.item()
-        scheduler.step(mae)
+        if epoch >= swa_start:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
+            swa_active = True
+        else:
+            scheduler.step(mae)
         if mae < best_mae - 1e-4:
             best_mae = mae
             epochs_no_improve = 0
@@ -216,9 +227,10 @@ def train_quantum_prophet(
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - MAE: {mae:.6f}")
 
     # Evaluate correlation and error on training data for diagnostics
-    model.eval()
+    final_model = swa_model if swa_active else model
+    final_model.eval()
     with torch.no_grad():
-        train_preds = model(X_train).cpu()
+        train_preds = final_model(X_train).cpu()
 
     corr = float(
         torch.corrcoef(torch.stack((train_preds.squeeze(), y_train.squeeze())))[0, 1]
@@ -238,8 +250,8 @@ def train_quantum_prophet(
 
     mse = nn.functional.mse_loss(train_preds, y_train).item()
     with torch.no_grad():
-        preds = model(X_test).cpu().numpy().flatten()
+        preds = final_model(X_test).cpu().numpy().flatten()
 
     print(f"[QProphet] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
 
-    return model, preds
+    return final_model, preds
