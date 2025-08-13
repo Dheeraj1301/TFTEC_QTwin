@@ -86,11 +86,13 @@ def main():
 
     df = pd.read_csv("data/synthetic_tftec_cop.csv")
 
-    X_train, y_train, X_test, y_test = load_and_split_data(
+    X_train, y_train, X_test, y_test, min_vals, max_vals = load_and_split_data(
         "data/synthetic_tftec_cop.csv",
         window_size=args.window,
         use_augmentation=args.use_augmentation,
+        return_scaler=True,
     )
+    cop_min, cop_max = float(min_vals[0]), float(max_vals[0])
 
     if args.use_drift:
         drift_flags = detect_drift(df["CoP"])
@@ -146,6 +148,7 @@ def main():
                 plot=True,
                 lower=lower_lstm.flatten(),
                 upper=upper_lstm.flatten(),
+                scaler=(cop_min, cop_max),
             )
             evaluate_acga(qlstm_model.acga, name="qlstm_acga")
         if qprophet_model is not None:
@@ -163,14 +166,27 @@ def main():
                 plot=True,
                 lower=lower_prophet.flatten(),
                 upper=upper_prophet.flatten(),
+                scaler=(cop_min, cop_max),
             )
             evaluate_acga(qprophet_model.acga, name="qprophet_acga")
     else:
         if qlstm_preds is not None:
-            evaluate_model(y_test, qlstm_preds, name="Quantum LSTM", plot=True)
+            evaluate_model(
+                y_test,
+                qlstm_preds,
+                name="Quantum LSTM",
+                plot=True,
+                scaler=(cop_min, cop_max),
+            )
             evaluate_acga(qlstm_model.acga, name="qlstm_acga")
         if qprophet_preds is not None:
-            evaluate_model(y_test, qprophet_preds, name="Quantum NeuralProphet", plot=True)
+            evaluate_model(
+                y_test,
+                qprophet_preds,
+                name="Quantum NeuralProphet",
+                plot=True,
+                scaler=(cop_min, cop_max),
+            )
             evaluate_acga(qprophet_model.acga, name="qprophet_acga")
 
 if __name__ == "__main__":
