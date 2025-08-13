@@ -20,6 +20,7 @@ try:  # pragma: no cover - executed only when deps are available
 
     from utils.quantum_layers import QuantumLayer, n_qubits
     from utils.preprocessing import SensorFusion
+    from utils.causal_graph_attention import AdaptiveCausalGraphAttention
 except Exception as exc:  # pragma: no cover - used for graceful degradation
     torch = None
     nn = None
@@ -62,6 +63,9 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             self.q_layer = QuantumLayer(n_layers=q_depth)
             self.q_dropout = nn.Dropout(dropout)
 
+            # Adaptive causal graph attention for inter-sensor relationships
+            self.acga = AdaptiveCausalGraphAttention(n_qubits)
+
             # Post-QNode MLP expanded to 4→32→1
             self.fc1 = nn.Linear(n_qubits, 32)
             self.act = nn.GELU()
@@ -76,11 +80,14 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             x = F.dropout(
                 x, p=self.cnn_dropout.p, training=self.training or mc_dropout
             )
-
-            # Mean pooling over timesteps then normalise before quantum layer
+            # Mean pooling over timesteps
             x = x.mean(dim=2)
-            x = self.norm(x)
-            x = self.q_layer(x)
+
+            # Compute causal embedding and fuse with base features
+            causal_emb = self.acga(x)
+            lam = self.acga.lambda_value()
+            q_input = self.norm(x + lam * causal_emb)
+            x = self.q_layer(q_input)
             x = F.dropout(
                 x, p=self.q_dropout.p, training=self.training or mc_dropout
             )
@@ -204,6 +211,7 @@ def train_quantum_prophet(
                 drift_detector.log("QProphet", epoch + 1, prev, curr)
                 print(f"[QProphet] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model(severity)
+                model.acga.adjust_lambda(severity)
 
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - MAE: {mae:.6f}")
 
