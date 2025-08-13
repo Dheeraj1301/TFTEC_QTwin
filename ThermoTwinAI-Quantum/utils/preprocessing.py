@@ -29,6 +29,7 @@ def load_and_split_data(
     window_size: int = 15,
     use_augmentation: bool = False,
     seed: int | None = 42,
+    return_scaler: bool = False,
 ):
     """Load CSV data and create windowed training and test splits.
 
@@ -81,5 +82,8 @@ def load_and_split_data(
 
     X_train, y_train = create_windows(train_data)
     X_test, y_test = create_windows(test_data)
+
+    if return_scaler:
+        return X_train, y_train, X_test, y_test, min_vals, max_vals
 
     return X_train, y_train, X_test, y_test

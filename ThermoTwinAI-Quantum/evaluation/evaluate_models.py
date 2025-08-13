@@ -15,6 +15,7 @@ def evaluate_model(
     plot: bool = False,
     lower=None,
     upper=None,
+    scaler: tuple[float, float] | None = None,
 ):
     """Print regression metrics, optionally plot and return them.
 
@@ -26,28 +27,37 @@ def evaluate_model(
     y_true = np.ravel(y_true)
     y_pred = np.ravel(y_pred)
 
+    if scaler is not None:
+        y_min, y_max = scaler
+        scale = y_max - y_min
+        y_true_plot = y_true * scale + y_min
+        y_pred_plot = y_pred * scale + y_min
+    else:
+        y_true_plot = y_true
+        y_pred_plot = y_pred
+
     # Metrics computed with numpy to avoid external dependencies
-    diff = y_true - y_pred
+    diff = y_true_plot - y_pred_plot
     abs_diff = np.abs(diff)
     sq_diff = diff * diff
 
     mae = abs_diff.mean()
     rmse = np.sqrt(sq_diff.mean())
-    mape = (abs_diff / (np.abs(y_true) + 1e-8)).mean()
+    mape = (abs_diff / (np.abs(y_true_plot) + 1e-8)).mean()
 
     ss_res = sq_diff.sum()
-    y_true_mean = y_true.mean()
-    ss_tot = np.sum((y_true - y_true_mean) ** 2) + 1e-8
+    y_true_mean = y_true_plot.mean()
+    ss_tot = np.sum((y_true_plot - y_true_mean) ** 2) + 1e-8
     r2 = max(0.0, 1 - ss_res / ss_tot)
 
-    std_true = y_true.std()
-    std_pred = y_pred.std()
+    std_true = y_true_plot.std()
+    std_pred = y_pred_plot.std()
     if std_true == 0 or std_pred == 0:
         corr = 0.0
     else:
         corr = abs(
-            np.dot(y_true - y_true_mean, y_pred - y_pred.mean())
-            / (y_true.size * std_true * std_pred)
+            np.dot(y_true_plot - y_true_mean, y_pred_plot - y_pred_plot.mean())
+            / (y_true_plot.size * std_true * std_pred)
         )
 
     print(f"📌 {name} Evaluation")
@@ -60,7 +70,10 @@ def evaluate_model(
     if lower is not None and upper is not None:
         lower = np.ravel(lower)
         upper = np.ravel(upper)
-        coverage = np.mean((y_true >= lower) & (y_true <= upper))
+        if scaler is not None:
+            lower = lower * scale + y_min
+            upper = upper * scale + y_min
+        coverage = np.mean((y_true_plot >= lower) & (y_true_plot <= upper))
         sharpness = np.mean(upper - lower)
         print(f"   Coverage = {coverage:.4f}")
         print(f"   Sharpness = {sharpness:.6f}")
@@ -68,11 +81,11 @@ def evaluate_model(
     if plot and plt is not None:
         os.makedirs("plots", exist_ok=True)
         plt.figure()
-        plt.plot(y_true, label="True")
-        plt.plot(y_pred, label="Predicted")
+        plt.plot(y_true_plot, label="True")
+        plt.plot(y_pred_plot, label="Predicted")
         if lower is not None and upper is not None:
             plt.fill_between(
-                np.arange(len(y_true)), lower, upper, color="gray", alpha=0.2
+                np.arange(len(y_true_plot)), lower, upper, color="gray", alpha=0.2
             )
         plt.legend()
         plt.title(name)
