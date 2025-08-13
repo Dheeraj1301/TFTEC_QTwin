@@ -3,7 +3,7 @@ from utils.preprocessing import load_and_split_data
 from models.quantum_lstm import train_quantum_lstm
 from models.quantum_prophet import train_quantum_prophet
 from utils.drift_detection import DriftDetector, detect_drift, apply_drift_mask
-from evaluation.evaluate_models import evaluate_model
+from evaluation.evaluate_models import evaluate_model, evaluate_acga
 from utils.uncertainty import mc_dropout_predict
 import numpy as np
 import csv
@@ -147,6 +147,7 @@ def main():
                 lower=lower_lstm.flatten(),
                 upper=upper_lstm.flatten(),
             )
+            evaluate_acga(qlstm_model.acga, name="qlstm_acga")
         if qprophet_model is not None:
             mean_prophet, lower_prophet, upper_prophet, std_prophet = mc_dropout_predict(
                 qprophet_model, X_test_tensor
@@ -163,11 +164,14 @@ def main():
                 lower=lower_prophet.flatten(),
                 upper=upper_prophet.flatten(),
             )
+            evaluate_acga(qprophet_model.acga, name="qprophet_acga")
     else:
         if qlstm_preds is not None:
             evaluate_model(y_test, qlstm_preds, name="Quantum LSTM", plot=True)
+            evaluate_acga(qlstm_model.acga, name="qlstm_acga")
         if qprophet_preds is not None:
             evaluate_model(y_test, qprophet_preds, name="Quantum NeuralProphet", plot=True)
+            evaluate_acga(qprophet_model.acga, name="qprophet_acga")
 
 if __name__ == "__main__":
     main()
