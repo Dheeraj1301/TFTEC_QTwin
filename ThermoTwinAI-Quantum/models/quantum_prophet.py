@@ -97,7 +97,7 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
                 x, p=self.fc1_dropout.p, training=self.training or mc_dropout
             )
             out = self.fc2(x)
-            return torch.clamp(out, -3, 3)
+            return out
 
 
 def train_quantum_prophet(
