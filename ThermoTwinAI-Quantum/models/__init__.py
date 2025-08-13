@@ -12,5 +12,7 @@ modules like :mod:`models.quantum_lstm` can be imported when executing
 ``main.py`` directly.
 """
 
-__all__ = []
->>>>>>> 4ad812c43a95a4e99c2a9320230fd529e98beae6
+from .quantum_lstm import train_quantum_lstm
+from .quantum_prophet import train_quantum_prophet
+
+__all__ = ["train_quantum_lstm", "train_quantum_prophet"]
