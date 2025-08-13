@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Union
 
 import numpy as np
 import torch
@@ -13,7 +15,6 @@ from evaluation.evaluate_models import evaluate_model
 from models.quantum_lstm import train_quantum_lstm
 from models.quantum_prophet import train_quantum_prophet
 from utils.preprocessing import load_and_split_data
-from pathlib import Path
 
 
 class VanillaLSTM(nn.Module):
@@ -69,8 +70,8 @@ def train_prophet_baseline(y_train, periods: int):  # pragma: no cover - heavy d
 
 
 def run_benchmarks(
-    data_path: str | Path | None = None,
-    results_path: str | Path | None = None,
+    data_path: Optional[Union[str, Path]] = None,
+    results_path: Optional[Union[str, Path]] = None,
 ) -> None:
     """Run baseline and quantum benchmarks and write results to CSV.
 

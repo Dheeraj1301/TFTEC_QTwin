@@ -7,7 +7,7 @@ them through a two-layer entangling quantum circuit and applies a small MLP
 head. Dropout layers around the quantum circuit help stabilise training.
 """
 
-from typing import Any
+from typing import Any, Optional, Tuple
 
 from utils.drift_detection import DriftDetector, adjust_learning_rate
 
@@ -101,9 +101,9 @@ def train_quantum_prophet(
     hidden_dim: int = 32,
     q_depth: int = 2,
     dropout: float = 0.25,
-    drift_detector: DriftDetector | None = None,
+    drift_detector: Optional[DriftDetector] = None,
     patience: int = 10,
-) -> tuple[Any, Any]:
+) -> Tuple[Any, Any]:
     """Train ``QProphetModel`` and return the model with predictions for ``X_test``.
 
     If the optional dependencies (``torch`` and ``pennylane``) are not
@@ -144,7 +144,7 @@ def train_quantum_prophet(
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
     X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
 
-    def adapt_model(severity: float | None = None) -> None:
+    def adapt_model(severity: Optional[float] = None) -> None:
         if drift_detector is None:
             return
         window = drift_detector.window_size
