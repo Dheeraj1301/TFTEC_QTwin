@@ -8,6 +8,8 @@ keeps simulation costs low while improving correlation and stability.
 """
 
 import random
+from typing import Optional, Tuple
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -130,9 +132,9 @@ def train_quantum_lstm(
     hidden_size: int = 16,
     q_depth: int = 2,
     dropout: float = 0.25,
-    drift_detector: DriftDetector | None = None,
+    drift_detector: Optional[DriftDetector] = None,
     patience: int = 10,
-) -> tuple[nn.Module, np.ndarray]:
+) -> Tuple[nn.Module, np.ndarray]:
     """Train ``QLSTMModel`` and return the model with predictions for ``X_test``."""
     torch.manual_seed(42)
     np.random.seed(42)
@@ -160,7 +162,7 @@ def train_quantum_lstm(
     y_train = torch.tensor(y_train[:, None], dtype=torch.float32).to(device)
     X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
 
-    def adapt_model(severity: float | None = None) -> None:
+    def adapt_model(severity: Optional[float] = None) -> None:
         """Retrain the final layers on the most recent window of data."""
         if drift_detector is None:
             return

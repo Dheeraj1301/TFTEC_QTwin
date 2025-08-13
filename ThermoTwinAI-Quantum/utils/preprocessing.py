@@ -2,6 +2,8 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from typing import Optional
+
 from utils.data_augmentation import augment_time_series
 
 
@@ -28,7 +30,7 @@ def load_and_split_data(
     path: str,
     window_size: int = 15,
     use_augmentation: bool = False,
-    seed: int | None = 42,
+    seed: Optional[int] = 42,
 ):
     """Load CSV data and create windowed training and test splits.
 
