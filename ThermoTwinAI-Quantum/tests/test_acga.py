@@ -17,6 +17,8 @@ def test_acga_shape_and_lambda_adjust():
     x = torch.randn(2, 10, 5)
     emb = acga(x)
     assert emb.shape == (2, n_qubits)
+    attn = acga.attention_matrix()
+    assert attn is not None and attn.shape == (5, 5)
     lam0 = acga.lambda_value().item()
     acga.adjust_lambda(0.5)
     lam1 = acga.lambda_value().item()
