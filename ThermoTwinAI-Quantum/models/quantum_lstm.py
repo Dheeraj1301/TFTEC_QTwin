@@ -128,9 +128,9 @@ class QLSTMModel(nn.Module):
             q_out, p=self.q_dropout.p, training=self.training or mc_dropout
         )
 
-        # Post-quantum MLP head with output clamped to [-3, 3]
+        # Post-quantum MLP head returning raw value for wider prediction range
         out = self.fc2(self.act(self.fc1(q_out)))
-        return torch.clamp(out, -3, 3)
+        return out
 
 
 def train_quantum_lstm(
@@ -236,7 +236,6 @@ def train_quantum_lstm(
     model.eval()
     with torch.no_grad():
         train_preds = model(X_train).cpu()
-        preds = model(X_test).cpu().numpy().flatten()
 
     # Pearson correlation and MSE on training set
     corr = float(
@@ -251,6 +250,11 @@ def train_quantum_lstm(
         corr = -corr
 
     mse = nn.functional.mse_loss(train_preds, y_train).item()
+
+    # Generate test predictions after any sign correction
+    with torch.no_grad():
+        preds = model(X_test).cpu().numpy().flatten()
+
     print(f"[QLSTM] Train Corr: {corr:.3f} - MSE: {mse:.6f}")
 
     return model, preds
