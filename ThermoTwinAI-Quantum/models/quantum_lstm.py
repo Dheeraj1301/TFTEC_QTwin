@@ -25,7 +25,7 @@ class QLSTMModel(nn.Module):
     def __init__(
         self,
         input_size: int,
-        hidden_size: int = 16,
+        hidden_size: int = 20,
         q_depth: int = 2,
         use_conv: bool = False,
         dropout: float = 0.25,
@@ -60,9 +60,11 @@ class QLSTMModel(nn.Module):
         # ``forward`` to keep it in ``[0, 1]``.
         self.alpha = nn.Parameter(torch.tensor(0.5))
 
-        # Two LayerNorms: one before the quantum layer and one on the quantum
-        # output, stabilising both classical and quantum representations.
+        # Two LayerNorms: one before the quantum layer, one after causal fusion
+        # and one on the quantum output, stabilising both classical and quantum
+        # representations.
         self.ln1 = nn.LayerNorm(hidden_size)
+        self.post_fusion_ln = nn.LayerNorm(n_qubits)
         self.ln2 = nn.LayerNorm(n_qubits)
 
         # Dropout directly on the LSTM representations and after the quantum
@@ -79,10 +81,10 @@ class QLSTMModel(nn.Module):
         # Adaptive causal graph attention to model inter-sensor influence
         self.acga = AdaptiveCausalGraphAttention(input_size, n_qubits)
 
-        # Output head: Linear(4→16) → GELU → Linear(16→1)
-        self.fc1 = nn.Linear(n_qubits, 16)
+        # Output head: Linear(4→20) → GELU → Linear(20→1)
+        self.fc1 = nn.Linear(n_qubits, 20)
         self.act = nn.GELU()
-        self.fc2 = nn.Linear(16, 1)
+        self.fc2 = nn.Linear(20, 1)
 
     def forward(self, x: torch.Tensor, mc_dropout: bool = False) -> torch.Tensor:
         # Apply learnable sensor fusion weights
@@ -121,7 +123,7 @@ class QLSTMModel(nn.Module):
 
         # Combine base LSTM features with causal embedding for quantum input
         base = self.ln1(fused)[:, :n_qubits]
-        q_input = F.layer_norm(base + lam * causal_emb, (n_qubits,))
+        q_input = self.post_fusion_ln(base + lam * causal_emb)
         q_out = self.q_layer(q_input)
         q_out = self.ln2(q_out)
         q_out = F.dropout(
@@ -139,7 +141,7 @@ def train_quantum_lstm(
     X_test,
     epochs: int = 50,
     lr: float = 0.001,
-    hidden_size: int = 16,
+    hidden_size: int = 20,
     q_depth: int = 2,
     dropout: float = 0.25,
     drift_detector: DriftDetector | None = None,
@@ -229,6 +231,8 @@ def train_quantum_lstm(
                 print(f"[QLSTM] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model(severity)
                 model.acga.adjust_lambda(severity)
+            else:
+                model.acga.adjust_lambda(-0.01)
 
         print(f"[QLSTM] Epoch {epoch + 1}/{epochs} - Loss: {loss.item():.6f}")
 
