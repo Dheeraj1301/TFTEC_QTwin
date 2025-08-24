@@ -40,7 +40,7 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
         def __init__(
             self,
             num_features: int,
-            hidden_dim: int = 32,  # retained for backwards compatibility
+            hidden_dim: int = 40,  # increased capacity
             q_depth: int = 2,
             dropout: float = 0.25,
         ) -> None:
@@ -67,11 +67,11 @@ if torch is not None:  # pragma: no cover - executed only when deps are availabl
             # Adaptive causal graph attention for inter-sensor relationships
             self.acga = AdaptiveCausalGraphAttention(n_qubits)
 
-            # Post-QNode MLP expanded to 4→32→1
-            self.fc1 = nn.Linear(n_qubits, 32)
+            # Post-QNode MLP expanded to 4→hidden_dim→1
+            self.fc1 = nn.Linear(n_qubits, hidden_dim)
             self.act = nn.GELU()
             self.fc1_dropout = nn.Dropout(dropout)
-            self.fc2 = nn.Linear(32, 1)
+            self.fc2 = nn.Linear(hidden_dim, 1)
 
         def forward(self, x: torch.Tensor, mc_dropout: bool = False) -> torch.Tensor:
             # Apply sensor fusion then rearrange for Conv1d
@@ -106,7 +106,7 @@ def train_quantum_prophet(
     X_test: Any,
     epochs: int = 50,
     lr: float = 0.001,
-    hidden_dim: int = 32,
+    hidden_dim: int = 40,
     q_depth: int = 2,
     dropout: float = 0.25,
     drift_detector: DriftDetector | None = None,
@@ -223,6 +223,8 @@ def train_quantum_prophet(
                 print(f"[QProphet] Drift detected at epoch {epoch + 1}. Adapting...")
                 adapt_model(severity)
                 model.acga.adjust_lambda(severity)
+            else:
+                model.acga.adjust_lambda(-0.01)
 
         print(f"[QProphet] Epoch {epoch + 1}/{epochs} - MAE: {mae:.6f}")
 
