@@ -38,7 +38,8 @@ def load_and_split_data(
     path:
         Path to the CSV file containing the time series. The first column is
         ignored (assumed to be an index) and the remaining columns are scaled
-        to ``[0, 1]``.
+        to ``[0, 1]``. A derived ``CoP_diff`` feature capturing the change in
+        Coefficient of Performance is appended prior to scaling.
     window_size:
         Length of each input sequence.
     use_augmentation:
@@ -50,6 +51,11 @@ def load_and_split_data(
     """
 
     raw = np.genfromtxt(path, delimiter=",", skip_header=1)
+
+    # Derive incremental CoP change feature and append to the raw array. The
+    # first value uses a neutral zero difference to preserve alignment.
+    cop_diff = np.concatenate([[0.0], np.diff(raw[:, 1])])
+    raw = np.column_stack((raw, cop_diff))
 
     # Exclude the week column and clamp outliers using the IQR method before
     # scaling. This reduces the impact of extreme sensor spikes which could

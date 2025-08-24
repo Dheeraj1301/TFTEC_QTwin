@@ -75,6 +75,11 @@ def main():
         default="both",
         help="Select which model to train",
     )
+    parser.add_argument(
+        "--no_drift_mask",
+        action="store_true",
+        help="Disable masking during training but keep drift-driven λ updates",
+    )
     args = parser.parse_args()
 
     if args.lr is None:
@@ -96,9 +101,10 @@ def main():
 
     if args.use_drift:
         drift_flags = detect_drift(df["CoP"])
-        X_train, y_train = apply_drift_mask(
-            X_train, y_train, drift_flags, window=args.window
-        )
+        if not args.no_drift_mask:
+            X_train, y_train = apply_drift_mask(
+                X_train, y_train, drift_flags, window=args.window
+            )
 
     drift_detector = DriftDetector(window_size=5, threshold=0.2)
 
@@ -111,7 +117,7 @@ def main():
             X_test,
             epochs=args.epochs,
             lr=args.lr,
-            hidden_size=32,
+            hidden_size=40,
             dropout=0.25,
             drift_detector=drift_detector,
         )
@@ -125,7 +131,7 @@ def main():
             X_test,
             epochs=args.epochs,
             lr=args.lr,
-            hidden_dim=64,
+            hidden_dim=80,
             dropout=0.25,
             drift_detector=drift_detector,
         )

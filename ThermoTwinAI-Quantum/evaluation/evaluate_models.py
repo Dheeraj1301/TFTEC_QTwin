@@ -1,4 +1,5 @@
 # evaluation/evaluate_models.py
+import json
 import numpy as np
 import os
 
@@ -44,6 +45,9 @@ def evaluate_model(
     mae = abs_diff.mean()
     rmse = np.sqrt(sq_diff.mean())
     mape = (abs_diff / (np.abs(y_true_plot) + 1e-8)).mean()
+    smape = (
+        2.0 * abs_diff / (np.abs(y_true_plot) + np.abs(y_pred_plot) + 1e-8)
+    ).mean()
 
     ss_res = sq_diff.sum()
     y_true_mean = y_true_plot.mean()
@@ -64,6 +68,7 @@ def evaluate_model(
     print(f"   MAE     = {mae:.6f}")
     print(f"   RMSE    = {rmse:.6f}")
     print(f"   MAPE    = {mape:.6f}")
+    print(f"   SMAPE   = {smape:.6f}")
     print(f"   R²      = {r2:.4f}")
     print(f"   Corr(R) = {corr:.4f}")
 
@@ -95,13 +100,29 @@ def evaluate_model(
         plt.close()
         print(f"   Plot saved to {fname}")
 
-    return {
+    metrics = {
         "MAE": float(mae),
         "RMSE": float(rmse),
         "MAPE": float(mape),
+        "SMAPE": float(smape),
         "R2": float(r2),
         "Corr": float(corr),
     }
+
+    os.makedirs("results", exist_ok=True)
+    try:
+        if os.path.exists("results/metrics.json"):
+            with open("results/metrics.json", "r", encoding="utf-8") as f:
+                all_metrics = json.load(f)
+        else:
+            all_metrics = {}
+    except Exception:
+        all_metrics = {}
+    all_metrics[name] = metrics
+    with open("results/metrics.json", "w", encoding="utf-8") as f:
+        json.dump(all_metrics, f, indent=2)
+
+    return metrics
 
 
 def evaluate_acga(acga, save: bool = True, name: str = "acga_attention"):
