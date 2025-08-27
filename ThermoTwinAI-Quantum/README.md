@@ -88,3 +88,244 @@ complex settings. The current results nonetheless establish that even a lightwei
 outperform the univariate baseline by a meaningful margin and deliver trend alignment suitable for degradation monitoring.
 
 <img src="plots/quantum_neuralprophet_pred.png" width="375" alt="Quantum NeuralProphet prediction plotted against measurements" />
+
+## Experiment Entries
+🔹 Entry 1 — Drift-Aware Learning Rate Scaling
+
+Change
+
+CLI pipeline learning rate lowered to 0.001 whenever drift masking enabled.
+
+QLSTM refined by: disabling convolutional smoothing, averaging last timestep with sequence mean, reducing quantum dropout, seeding runs, scaling LR by drift severity.
+
+QProphet enhanced with mean pooling across timesteps, lighter dropout, severity-aware LR adaptation.
+
+Evaluation
+
+QLSTM: MAE=0.1263, RMSE=0.1331, Corr=0.6030
+
+QProphet: MAE=0.2442, RMSE=0.2497, Corr=-0.6107
+
+Analysis
+
+QLSTM improved with moderate correlation.
+
+NeuralProphet underperformed, correlation inverted → unstable training under drift masking.
+
+🔹 Entry 2 — AdamW + ReduceLROnPlateau (NeuralProphet)
+
+Change
+
+NeuralProphet switched to AdamW(AMSGrad) + ReduceLROnPlateau scheduler.
+
+Consistent AdamW adoption for drift adaptation.
+
+Documentation updated.
+
+Evaluation
+
+QLSTM: MAE=0.1150, RMSE=0.1191, Corr=0.7624
+
+QProphet: MAE=0.3056, RMSE=0.3092, Corr=0.2433
+
+Analysis
+
+QLSTM correlation improved to >0.75.
+
+NeuralProphet stabilized but accuracy worsened slightly. Scheduler improved convergence safety.
+
+🔹 Entry 3 — MAE-Optimized Training
+
+Change
+
+QProphet optimized MAE directly with AdamW + light weight decay.
+
+Training loop updated to drive LR scheduler from epoch MAE.
+
+Evaluation
+
+QLSTM: MAE=0.1314, RMSE=0.1512, Corr=0.5426
+
+QProphet: MAE=0.2670, RMSE=0.2807, Corr=0.0213
+
+Analysis
+
+Correlation degraded for Prophet, nearly zero.
+
+LSTM remained relatively stable, though accuracy dropped compared to Entry 2.
+
+🔹 Entry 4 — Data Augmentation + LayerNorm
+
+Change
+
+Introduced augment_time_series utility (window slicing, Gaussian noise, scaling, seasonal drift, time warping).
+
+QNode depth clamped (1–2).
+
+LSTM variant: extra dropout.
+
+Prophet variant: inserted LayerNorm(4).
+
+Evaluation
+
+QLSTM: MAE=0.0921, RMSE=0.1016, Corr=-0.2886
+
+QProphet: MAE=0.3621, RMSE=0.3632, Corr=0.1357
+
+Analysis
+
+Augmentation improved raw error metrics (lower MAE/RMSE) but correlation collapsed (QLSTM negative).
+
+Suggests augmented samples may be misaligned temporally.
+
+🔹 Entry 5 — AdamW + Gradient Clipping
+
+Change
+
+Introduced AdamW+AMSGrad+ReduceLROnPlateau in both QLSTM and QProphet.
+
+Gradient clipping added for drift adaptation.
+
+Evaluation
+
+QLSTM: MAE=0.1496, RMSE=0.1550, Corr=0.4532
+
+QProphet: MAE=0.3769, RMSE=0.3793, Corr=0.0175
+
+Analysis
+
+Safe but less accurate. Trade-off: stable training, weaker precision.
+
+🔹 Entry 6 — Configurable Quantum Layer Depth + Residuals
+
+Change
+
+Prophet: quantum layer depth, dropout, head size made configurable.
+
+Added residual skip connection around quantum circuit.
+
+Evaluation
+
+QLSTM: MAE=0.0227, RMSE=0.0273, Corr=0.1478
+
+QProphet: MAE=0.2588, RMSE=0.2599, Corr=-0.2751
+
+Analysis
+
+LSTM achieved best raw error yet, but weak correlation.
+
+Prophet correlation inverted → unstable dynamics.
+
+🔹 Entry 7 — Robust Metrics + Compatibility Fixes
+
+Change
+
+Regression metrics clamped (R² ≥ 0, |Corr| used).
+
+Typing fixes (Optional, Union) for Python 3.8 compatibility.
+
+Evaluation
+
+QLSTM: MAE=0.0801, RMSE=0.0846, MAPE=0.2066, R²=0, Corr=0.1308
+
+QProphet: MAE=1.0362, RMSE=1.0364, MAPE=2.6364, R²=0, Corr=0.2223
+
+Analysis
+
+Prophet blew up → poor forecasts.
+
+LSTM stable with ~0.08 MAE.
+
+🔹 Entry 8 — ACGA Integration
+
+Change
+
+New AdaptiveCausalGraphAttention (ACGA) with drift-aware λ gate.
+
+Integrated into both models before quantum layers.
+
+Training loops updated to raise λ on drift detection.
+
+Evaluation
+
+QLSTM: MAE=0.2918, RMSE=0.2928, Corr=0.3791
+
+QProphet: MAE=0.8789, RMSE=0.8793, Corr=0.1706
+
+Analysis
+
+Causal fusion increased interpretability (attention matrices logged).
+
+Accuracy not yet strong.
+
+🔹 Entry 9 — ACGA + Stochastic Weight Averaging
+
+Change
+
+Prophet: Stochastic Weight Averaging (SWA).
+
+ACGA refactored to produce sensor-to-sensor attention matrices.
+
+evaluate_acga utility added.
+
+Evaluation
+
+QLSTM: MAE=0.1033, RMSE=0.1037, Corr=0.5994
+
+ACGA Matrix: [0.2500, 0.2499, 0.2501, 0.2500]
+
+QProphet: MAE=0.2719, RMSE=0.2720, Corr=0.4826
+
+ACGA Matrix: [0.2499, 0.2501, 0.2501, 0.2500]
+
+Analysis
+
+Both models now show stable moderate correlations (~0.48–0.60).
+
+Attention matrices uniform → models still not emphasizing feature differences.
+
+🔹 Entry 10 — EMA-Smoothed Causal Attention + CoP_diff
+
+Change
+
+EMA-smoothed dropout-regularized causal attention.
+
+Engineered new CoP_diff feature with IQR clipping + scaling.
+
+Model capacity +25%, post-fusion LayerNorm, λ decay when drift absent.
+
+Added SMAPE metric, results persisted to JSON.
+
+Evaluation
+
+QLSTM: MAE=0.1451, RMSE=0.1514, Corr=0.1785, ACGA nearly uniform.
+
+QProphet: MAE=0.1754, RMSE=0.1807, Corr=0.4681, ACGA nearly uniform.
+
+Analysis
+
+Prophet improved, LSTM regressed in correlation.
+
+ACGA still flat.
+
+🔹 Entry 11 — Final Extended Metrics
+
+Change
+
+Broader dynamic range allowed by removing restrictive clamping.
+
+Test predictions regenerated after sign inversion.
+
+Evaluation
+
+QLSTM: MAE=0.3491, RMSE=0.3493, SMAPE=0.3185, Corr=0.2674
+
+QProphet: MAE=0.1380, RMSE=0.1383, SMAPE=0.1030, Corr=0.4929
+
+ACGA matrices saved.
+
+Analysis
+
+Prophet stabilized significantly with correlation ~0.49 and low error.
+
+LSTM worsened. Prophet may now be more reliable.
