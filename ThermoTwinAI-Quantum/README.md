@@ -329,3 +329,150 @@ Analysis
 Prophet stabilized significantly with correlation ~0.49 and low error.
 
 LSTM worsened. Prophet may now be more reliable.
+
+## TFDEC Quantum Forecasting – Architecture Change Log (Set 2)
+
+### 1. Incremental Architectural Changes
+
+🔹 **Change 1 — Batchwise Quantum Evaluation**
+
+*Modification*: Improved `QuantumLayer` to iterate over each sample in a batch.
+
+*Goal*: Ensure correct handling of batched inputs when evaluating quantum circuits.
+
+🔹 **Change 2 — Multivariate Sensor Data**
+
+*Modification*:
+
+- Synthetic TFTEC data expanded with ambient temperature, current, and ZT.
+- Preprocessing scaled and windowed multi-feature inputs.
+- Both models updated to flexibly handle multivariate feature counts.
+- Added optional prediction vs. ground-truth plotting.
+
+*Goal*: Enable CoP forecasting using multiple sensor histories.
+
+🔹 **Change 3 — Deeper, Bidirectional Architectures**
+
+*QLSTM*: Added bidirectional modeling with attention and configurable quantum depth.
+
+*QProphet*:
+
+- Projected multivariate inputs down to four features.
+- Passed through an adjustable quantum layer, then a deeper classical stack.
+
+Additional updates:
+
+- Humidity + module_current added to dataset.
+- Heavy dependencies replaced with lightweight numpy preprocessing.
+- CLI extended for tuning (window, epochs, LR).
+
+*Goal*: Richer expressivity with multivariate modeling while remaining CPU-friendly.
+
+🔹 **Change 4 — Rich Encoders + Config Dictionaries (FAILED & REVERTED)**
+
+*QLSTM*: Normalized LSTM outputs, stacked quantum layers, added tunable MLP readout.
+
+*QProphet*: 1D CNN–GRU temporal encoder, deeper entanglement, residual head.
+
+Additional: CLI/config dicts for LR, hidden size, quantum depth.
+
+*Result*: Introduced instability → reverted.
+
+🔹 **Change 5 — Streamlined Single-Direction LSTM**
+
+*QLSTM*: Single-direction, normalized last timestep (4-qubit slice) → shallow quantum circuit → 32-unit ReLU head.
+
+*QProphet*: Conv1D projection to four qubits → LayerNorm + dropout → BatchNorm–ReLU–Linear head.
+
+*Goal*: Simplification for stable training.
+
+🔹 **Change 6 — Depth Limiting & Normalized Inputs**
+
+*QLSTM*: LayerNorm applied to qubit inputs, entangling depth capped at three layers.
+
+*Head*: Linear → BatchNorm → ReLU → Dropout(0.2) → Linear(32→1).
+
+*Goal*: Stabilize variance, align trends, and balance error metrics with correlation.
+
+🔹 **Change 7 — Duplicate Variant of Change 6**
+
+Same design as above (LayerNorm + capped depth + stabilized classical head).
+
+*Likely an iteration checkpoint.*
+
+🔹 **Change 8 — Residual Fusion + GELU Heads**
+
+*QLSTM*: Conv1D smoothing, residual fusion (final timestep + temporal mean), LayerNorm, capped depth=2, GELU-activated head (4→16→1).
+
+*QProphet*: Fixed 2-layer quantum depth, LayerNorm on input, post-quantum MLP: Linear(4→32) → BatchNorm → GELU → Dropout → Linear(32→1).
+
+*Goal*: Smoother temporal representation and gradient-stable learning.
+
+🔹 **Change 9 — Temporal Convolution & Normalization**
+
+*QLSTM*: Added temporal convolution, stabilized LSTM features with LayerNorm, fixed 2-layer quantum circuit.
+
+*QProphet*: Refined with fixed-depth quantum circuit, normalization of pooled features before circuit.
+
+*Goal*: Robust temporal smoothing and stable quantum inputs.
+
+🔹 **Change 10 — Parallel Residual Head**
+
+*QLSTM*: Normalized quantum inputs with LayerNorm; added residual head capturing linear trends in parallel with quantum path.
+
+*Goal*: Improve correlation and trend alignment by blending linear + quantum pathways.
+
+🔹 **Change 11 — Sigmoid-Bounded Forecasts**
+
+*QProphet*: Selected only most recent timestep, bounded outputs with sigmoid activation.
+
+*Goal*: Prevent inverted forecasts, keep outputs in normalized range.
+
+🔹 **Change 12a — Simplified QLSTM & QProphet**
+
+*QLSTM*: Final timestep normalized with `LayerNorm(input_size)` → depth-1 quantum circuit → ReLU MLP head → output clamped (−5, 5).
+
+*QProphet*: `Conv1D + ReLU` frontend → depth-1 quantum circuit → linear head (residual/sigmoid removed).
+
+*Diagnostics*: Printed Pearson correlation + MSE after training for both models.
+
+🔹 **Change 12b — Attention-Powered Rebuild**
+
+*QLSTM*: `MultiheadAttention` block, residual fusion (last + mean), LayerNorm, depth-1 quantum layer, GELU MLP head with clamped output.
+
+*QProphet*: `1D CNN (GELU)` → LayerNorm → minimal-depth quantum circuit → BatchNorm + Dropout MLP with clamped predictions.
+
+*Training utilities*: Gradient clipping + lower default learning rates.
+
+*Goal*: Stronger trend alignment and optimization stability.
+
+### 2. Best Evaluation Results
+
+✅ **Best Quantum LSTM Run**
+
+- **MAE**: 0.0761
+- **RMSE**: 0.0906
+- **Corr(R)**: 0.4562
+- **Associated Change**: Final timestep replaced with temporal average pooling.
+
+*Why it worked*: Smoothed short-term noise, improved consistency of trend capture.
+
+Plot: `plots/quantum_lstm_pred.png`
+
+✅ **Best Quantum NeuralProphet Run**
+
+- **MAE**: 0.0744
+- **RMSE**: 0.1142
+- **Corr(R)**: 0.6565
+- **Associated Change**: Residual CNN + normalized quantum input + tuned FC head (Dropout + GELU).
+
+*Why it worked*: Stabilized classical→quantum transition, smoothed short-term patterns, achieved excellent correlation.
+
+Plot: `plots/quantum_neuralprophet_pred.png`
+
+### 3. Observations
+
+- Simplification beats complexity: The best runs used temporal pooling, shallow quantum layers, and stable normalization rather than deep or highly entangled models.
+- QProphet outperformed QLSTM in correlation once CNN + residual fusion were introduced.
+- LayerNorm + bounded outputs were critical to avoid instability (sign flips, inverted trends).
+- Attention blocks were promising but need further tuning to avoid uniform weighting.
